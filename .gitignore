@@ -1,0 +1,11 @@
+CLAUDE.md
+.claude/
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+build/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
