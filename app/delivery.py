@@ -11,6 +11,16 @@ TIMEOUT = 5
 SNIPPET = 300
 
 
+class _NoRedirects(urllib.request.HTTPRedirectHandler):
+    # A delivery that redirects counts as a failure. Following it would let the destination
+    # point the worker at any other address and show what came back on the dashboard.
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+_opener = urllib.request.build_opener(_NoRedirects)
+
+
 def deliver(item: dict, *, failed_status: str, replay: bool = False) -> bool:
     """POST the event to DESTINATION_URL and record the attempt on the event.
 
@@ -26,7 +36,7 @@ def deliver(item: dict, *, failed_status: str, replay: bool = False) -> bool:
     )
     started = time.monotonic()
     try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+        with _opener.open(request, timeout=TIMEOUT) as response:
             status_code, reply = response.status, response.read(SNIPPET)
     except urllib.error.HTTPError as error:
         status_code, reply = error.code, error.read(SNIPPET)

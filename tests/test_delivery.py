@@ -48,3 +48,12 @@ def test_an_unreachable_app_is_a_failed_attempt(monkeypatch):
     saved = store.get_event("msg_1")
     assert saved["status"] == "dead"
     assert saved["attempts"][0]["status_code"] == 0
+
+
+def test_a_redirect_is_a_failed_attempt_and_is_not_followed(destination):
+    destination.replies.append(302)
+
+    assert not delivery.deliver(stored_event(), failed_status="retrying")
+
+    assert len(destination.received) == 1
+    assert store.get_event("msg_1")["attempts"][0]["status_code"] == 302

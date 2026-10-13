@@ -43,6 +43,8 @@ def destination(monkeypatch):
             received.append(({k.lower(): v for k, v in self.headers.items()}, body))
             status = replies.pop(0) if replies else 200
             self.send_response(status)
+            if 300 <= status < 400:
+                self.send_header("location", "/somewhere-else")
             self.end_headers()
             self.wfile.write(b"ok" if status < 400 else b"boom")
 
