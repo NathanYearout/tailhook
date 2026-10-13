@@ -14,7 +14,7 @@ def stored_event():
     return item
 
 
-def test_a_delivery_is_re_signed_and_recorded(destination):
+def test_delivery_is_resigned_and_recorded(destination):
     item = stored_event()
 
     assert delivery.deliver(item, failed_status="retrying")
@@ -30,7 +30,7 @@ def test_a_delivery_is_re_signed_and_recorded(destination):
     assert saved["attempts"][0]["replay"] is False
 
 
-def test_an_error_response_is_a_failed_attempt(destination):
+def test_error_response_fails(destination):
     destination.replies.append(500)
 
     assert not delivery.deliver(stored_event(), failed_status="retrying", replay=True)
@@ -42,7 +42,7 @@ def test_an_error_response_is_a_failed_attempt(destination):
     assert saved["attempts"][0]["replay"] is True
 
 
-def test_an_unreachable_app_is_a_failed_attempt(monkeypatch):
+def test_unreachable_app_fails(monkeypatch):
     monkeypatch.setenv("DESTINATION_URL", "http://127.0.0.1:9/")
 
     assert not delivery.deliver(stored_event(), failed_status="dead")
@@ -52,7 +52,7 @@ def test_an_unreachable_app_is_a_failed_attempt(monkeypatch):
     assert saved["attempts"][0]["status_code"] == 0
 
 
-def test_a_redirect_is_a_failed_attempt_and_is_not_followed(destination):
+def test_redirect_not_followed(destination):
     destination.replies.append(302)
 
     assert not delivery.deliver(stored_event(), failed_status="retrying")
@@ -61,7 +61,7 @@ def test_a_redirect_is_a_failed_attempt_and_is_not_followed(destination):
     assert store.get_event("msg_1")["attempts"][0]["status_code"] == 302
 
 
-def test_a_reply_that_isnt_http_is_a_failed_attempt(monkeypatch):
+def test_non_http_reply_fails(monkeypatch):
     server = socket.create_server(("127.0.0.1", 0))
 
     def answer():

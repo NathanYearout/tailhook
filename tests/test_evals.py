@@ -22,12 +22,12 @@ def outcome(answer, *tools):
     return {"answer": answer, "steps": [{"tool": tool} for tool in tools]}
 
 
-def test_an_answer_that_meets_every_rule_passes():
+def test_grade_good_answer():
     answer = "msg_e6b got a 500 three times and was delivered One Time after the fix."
     assert grade(CASE, outcome(answer, "get_event")) == []
 
 
-def test_each_broken_rule_is_reported():
+def test_grade_reports_each_failure():
     answer = "MSG_E6B is fine, all clear."
     assert grade(CASE, outcome(answer, "search_events")) == [
         "missing '500'",
@@ -59,7 +59,7 @@ FLIPS = {
 }
 
 
-def test_answers_that_flip_the_meaning_fail():
+def test_opposite_answers_fail():
     for name, (right, wrong) in FLIPS.items():
         case = CASES[name]
         tools = case.get("must_call", [])

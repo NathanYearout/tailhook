@@ -63,7 +63,7 @@ def test_list_events_newest_first(destination):
     assert [row["id"] for row in rows] == ["msg_b"]
 
 
-def test_list_events_rejects_a_bad_limit():
+def test_list_events_bad_limit():
     assert call("GET /api/events", query={"limit": "lots"})[0] == 400
 
 
@@ -97,14 +97,14 @@ def test_stats():
     )
 
 
-def test_the_merchant_switch():
+def test_merchant_switch():
     assert call("POST /api/merchant", {"fixed": True}) == (200, {"fixed": True})
     assert store.merchant_fixed()
     assert call("POST /api/merchant", {"fixed": "yes"})[0] == 400
     assert call("POST /api/merchant", raw="{nope")[0] == 400
 
 
-def test_simulate_sends_the_mixed_scenario(destination, monkeypatch):
+def test_simulate(destination, monkeypatch):
     monkeypatch.setenv("WEBHOOK_URL", destination.url)
 
     status, body = call("POST /api/simulate")
@@ -114,7 +114,7 @@ def test_simulate_sends_the_mixed_scenario(destination, monkeypatch):
     assert len(destination.received) == body["sent"]
 
 
-def test_the_demo_merchant_fails_refunds_until_the_fix_ships():
+def test_demo_merchant_refund_bug():
     refund = event_body("refund.created", "pay_1", T0)
 
     assert call("POST /demo/merchant", headers=outbound(refund), raw=refund) == (
@@ -125,14 +125,14 @@ def test_the_demo_merchant_fails_refunds_until_the_fix_ships():
     assert call("POST /demo/merchant", headers=outbound(refund), raw=refund) == (200, "ok")
 
 
-def test_the_demo_merchant_checks_signatures():
+def test_demo_merchant_checks_signatures():
     paid = event_body("payment.succeeded", "pay_1", T0)
 
     assert call("POST /demo/merchant", headers=outbound(paid), raw=paid) == (200, "ok")
     assert call("POST /demo/merchant", headers={}, raw=paid)[0] == 401
 
 
-def test_replay_goes_in_created_order_and_stops_at_the_first_failure(destination):
+def test_replay_stops_at_first_failure(destination):
     receive("msg_c", "refund.created", at=60)
     receive("msg_a", "payment.failed", at=0, code="51")
     receive("msg_b", "payment.succeeded", at=30, attempt=2)
@@ -149,7 +149,7 @@ def test_replay_goes_in_created_order_and_stops_at_the_first_failure(destination
     assert store.get_event("msg_b")["attempts"][-1]["replay"] is True
 
 
-def test_replaying_an_unknown_payment_is_404():
+def test_replay_unknown_payment():
     assert call("POST /api/payments/{id}/replay", path={"id": "pay_none"})[0] == 404
 
 
@@ -163,7 +163,7 @@ def dead_letter(msg_id, event_type="payment.succeeded", payment_id="pay_1", at=0
     aws.sqs().send_message(QueueUrl=os.environ["DLQ_URL"], MessageBody=json.dumps(message))
 
 
-def test_retry_dead_letters_delivers_in_created_order_and_clears_the_queue(destination):
+def test_retry_dead_letters(destination):
     dead_letter("msg_b", event_type="refund.created", at=30)
     dead_letter("msg_a", event_type="refund.created", payment_id="pay_2", at=0)
     destination.received.clear()
@@ -174,7 +174,7 @@ def test_retry_dead_letters_delivers_in_created_order_and_clears_the_queue(desti
     assert store.get_event("msg_a")["status"] == "delivered"
 
 
-def test_retry_dead_letters_keeps_what_still_fails(destination):
+def test_retry_keeps_failures(destination):
     dead_letter("msg_a", event_type="refund.created")
     destination.received.clear()
     destination.replies.append(500)
@@ -183,7 +183,7 @@ def test_retry_dead_letters_keeps_what_still_fails(destination):
     assert store.get_event("msg_a")["status"] == "dead"
 
 
-def test_retry_dead_letters_skips_events_already_replayed(destination):
+def test_retry_skips_replayed(destination):
     dead_letter("msg_a", event_type="refund.created")
     call("POST /api/payments/{id}/replay", path={"id": "pay_1"})
     destination.received.clear()
@@ -192,20 +192,20 @@ def test_retry_dead_letters_skips_events_already_replayed(destination):
     assert destination.received == []
 
 
-def test_ask_validates_the_question():
+def test_ask_validation():
     assert call("POST /api/ask", {"question": "  "})[0] == 400
     assert call("POST /api/ask", {"question": "x" * 501})[0] == 400
     assert call("POST /api/ask", {"nope": 1})[0] == 400
 
 
-def test_ask_answers_and_counts_against_the_budget(monkeypatch):
+def test_ask(monkeypatch):
     monkeypatch.setattr(agent, "ask", lambda question: {"answer": f"you asked {question}"})
 
     assert call("POST /api/ask", {"question": " why? "}) == (200, {"answer": "you asked why?"})
     assert call("GET /api/stats")[1]["questions_left"] == api.DAILY_QUESTIONS - 1
 
 
-def test_ask_stops_when_the_daily_budget_is_spent(monkeypatch):
+def test_ask_budget_spent(monkeypatch):
     monkeypatch.setattr(agent, "ask", lambda question: {"answer": "ok"})
     monkeypatch.setattr(api, "DAILY_QUESTIONS", 1)
 
@@ -213,7 +213,7 @@ def test_ask_stops_when_the_daily_budget_is_spent(monkeypatch):
     assert call("POST /api/ask", {"question": "two"})[0] == 429
 
 
-def test_ask_reports_a_model_outage(monkeypatch):
+def test_ask_model_outage(monkeypatch):
     def down(question):
         raise anthropic.APIConnectionError(request=httpx2.Request("POST", "https://example.com"))
 
@@ -225,21 +225,20 @@ def test_ask_reports_a_model_outage(monkeypatch):
     )
 
 
-def test_the_dashboard_is_served_as_html():
+def test_dashboard_html():
     status, page = call("GET /")
     assert status == 200
     assert "<title>tailhook</title>" in page
 
 
-def test_the_dashboard_never_renders_event_text_as_html():
+def test_dashboard_has_no_html_sinks():
     _, page = call("GET /")
     for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"):
         assert sink not in page
 
 
-def test_retry_dead_letters_delivers_events_that_outlived_their_row(destination):
-    # The table forgets events after 7 days and the DLQ keeps them for 14, but the message
-    # still carries the whole event.
+def test_retry_after_row_expired(destination):
+    # row already expired; the dead letter still has the whole event
     body = event_body("refund.created", "pay_1", T0)
     message = {"id": "msg_old", "body": body, "receipt": "r-old"}
     aws.sqs().send_message(QueueUrl=os.environ["DLQ_URL"], MessageBody=json.dumps(message))
@@ -249,7 +248,7 @@ def test_retry_dead_letters_delivers_events_that_outlived_their_row(destination)
     assert store.get_event("msg_old")["status"] == "delivered"
 
 
-def test_simulated_events_were_created_before_they_were_sent(destination, monkeypatch):
+def test_simulated_events_in_the_past(destination, monkeypatch):
     monkeypatch.setenv("WEBHOOK_URL", destination.url)
 
     call("POST /api/simulate")
@@ -258,7 +257,7 @@ def test_simulated_events_were_created_before_they_were_sent(destination, monkey
     assert max(created) <= store.iso(store.utcnow())
 
 
-def test_retry_reports_what_it_put_back_not_sqs_lagging_count(destination, monkeypatch):
+def test_retry_left_ignores_sqs_lag(destination, monkeypatch):
     dead_letter("msg_a", event_type="refund.created")
     monkeypatch.setattr(api, "_dead_letter_count", lambda: 2)  # SQS's count lags deletes
 

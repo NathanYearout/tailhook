@@ -46,7 +46,7 @@ def test_mixed_events_are_well_formed():
             assert payload["data"]["decline"]["code"] in DECLINE_CODES
 
 
-def test_mixed_has_duplicates_and_a_refund_that_overtakes_its_payment():
+def test_mixed_has_duplicates_and_an_early_refund():
     sends = simulator.mixed(7, T0)
     ids = [d.msg_id for d in sends]
     assert len(ids) - len(set(ids)) == 3
@@ -72,7 +72,7 @@ def test_send_posts_signed_events_in_order(destination):
         signing.verify(os.environ["INBOUND_SECRET"], headers, body)
 
 
-def test_load_spreads_unique_signed_events_across_processes(destination):
+def test_run_load_splits_across_processes(destination):
     result = simulator.run_load(destination.url, os.environ["INBOUND_SECRET"], 20, 1, workers=2)
 
     assert result["sent"] == 20
@@ -84,8 +84,7 @@ def test_load_spreads_unique_signed_events_across_processes(destination):
 
 
 def test_load_caps_requests_in_flight(monkeypatch):
-    # A slow app makes requests pile up. The generator has to hold them back itself: handing
-    # thousands to httpx's pool at once makes the pool spend its time scanning its own queue.
+    # a slow app makes requests pile up; they should wait on our side, not in httpx's pool
     monkeypatch.setattr(simulator, "MAX_IN_FLIGHT", 5)
     lock, live, peak = threading.Lock(), [0], [0]
 

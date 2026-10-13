@@ -38,8 +38,7 @@ def record_receipt(
     receipt that created it owns delivery; every other receipt only gets counted.
     """
     now = now or utcnow()
-    # An SQS redelivery repeats the receipt and the arrival time, so only a fresh id tells
-    # whether this call is the one that stored the event.
+    # a redelivery repeats receipt and timestamp, so tag the write to see if we created it
     call = os.urandom(8).hex()
     payload = json.loads(body)
     item = aws.table().update_item(
@@ -84,12 +83,9 @@ def record_receipt(
 
 
 def add_attempt(event_id: str, attempt: dict, status: str) -> None:
-    """Record a delivery attempt and set the event's status.
-
-    A failure never overwrites "delivered": a replay can race the worker, and a delivery that
-    landed first stands. Only the newest attempts are kept, since repeated replays could
-    otherwise grow the item past DynamoDB's 400 KB limit.
-    """
+    """Append an attempt and set the status, but never overwrite "delivered" with a failure
+    (a replay can race the worker). Keeps the newest KEEP_ATTEMPTS so replays can't push the
+    item past DynamoDB's 400 KB limit."""
     table = aws.table()
     update = {
         "Key": {"id": event_id},
@@ -161,8 +157,7 @@ def recent(
             query["FilterExpression"] = functools.reduce(operator.and_, filters)
         else:
             query["Limit"] = limit
-        # One page (up to 1 MB) per shard. A filtered search only looks through the few thousand
-        # most recent events; paginate if it ever needs to go further back.
+        # one page per shard, so a filtered search only sees the most recent few thousand
         found += aws.table().query(**query)["Items"]
     found.sort(key=_received, reverse=True)
     return found[:limit]

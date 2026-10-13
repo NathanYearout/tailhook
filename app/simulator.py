@@ -27,9 +27,7 @@ from app.store import iso, utcnow
 
 CARDS = [("visa", "4242"), ("mastercard", "4444"), ("amex", "0005"), ("discover", "1117")]
 ALPHABET = string.ascii_letters + string.digits
-# Per process. httpx's pool does work in proportion to its size on every request, so a load
-# test adds processes rather than connections.
-MAX_IN_FLIGHT = 50
+MAX_IN_FLIGHT = 50  # per process
 
 
 @dataclass(frozen=True)
@@ -160,8 +158,7 @@ async def load(url: str, secret: str, rate: float, duration: int, run: str, part
     latencies: list[float] = []
     statuses: Counter = Counter()
     limits = httpx.Limits(max_connections=MAX_IN_FLIGHT, max_keepalive_connections=MAX_IN_FLIGHT)
-    # Requests wait here rather than in httpx's pool, which rescans its whole queue every time
-    # a request finishes.
+    # Queue here, not in httpx's pool: it rescans its whole backlog on every request.
     gate = asyncio.Semaphore(MAX_IN_FLIGHT)
 
     async with httpx.AsyncClient(limits=limits, timeout=10) as client:

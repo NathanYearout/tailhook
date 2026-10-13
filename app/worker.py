@@ -15,7 +15,7 @@ def handler(event, context):
     for record in event["Records"]:
         try:
             ok = process(record)
-        except Exception:  # one bad message retries and dead-letters alone, not with its batch
+        except Exception:  # don't let one bad message fail the whole batch
             traceback.print_exc()
             ok = False
         if not ok:
@@ -27,8 +27,7 @@ def handler(event, context):
 def process(record: dict, now=None) -> bool:
     """Handle one SQS message. True means it's finished and can leave the queue."""
     message = json.loads(record["body"])
-    # When ingest queued it, which is when it arrived. Workers run in parallel and SQS doesn't
-    # keep order, so the time a worker gets to it says nothing about arrival order.
+    # arrival time is when ingest queued it, not when a worker got around to it
     now = now or datetime.fromtimestamp(int(record["attributes"]["SentTimestamp"]) / 1000, UTC)
     item, created = store.record_receipt(message["id"], message["body"], message["receipt"], now)
     if created:

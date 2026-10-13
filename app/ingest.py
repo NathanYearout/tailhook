@@ -33,15 +33,14 @@ def handler(event, context):
         QueueUrl=os.environ["QUEUE_URL"],
         MessageBody=json.dumps(
             {"id": headers["webhook-id"], "body": body, "receipt": receipt},
-            ensure_ascii=False,  # escaping would triple non-ASCII text and could overflow SQS
+            ensure_ascii=False,  # escaped, non-ASCII text can triple in size
         ),
     )
     return web.response(202, {"receipt": receipt})
 
 
 def _well_formed(msg_id: str, body: str) -> bool:
-    # The id, payment_id and timestamp become DynamoDB keys, so they have to be short,
-    # non-empty strings.
+    # these all end up as DynamoDB keys
     try:
         payload = json.loads(body)
         fields = (msg_id, payload["type"], payload["timestamp"], payload["data"]["payment_id"])

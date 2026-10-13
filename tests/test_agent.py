@@ -42,7 +42,7 @@ def declined_payment():
     store.record_receipt("msg_1", body, "r1", now=T0)
 
 
-def test_a_tool_call_then_an_answer():
+def test_tool_call_then_answer():
     client = FakeClient(
         reply("tool_use", tool_use("payment_timeline", {"payment_id": "pay_1"})),
         reply("end_turn", text("Declined with code 51 (msg_1).")),
@@ -58,7 +58,7 @@ def test_a_tool_call_then_an_answer():
     assert json.loads(tool_result["content"])[0]["decline_code"] == "51"
 
 
-def test_every_request_carries_the_system_prompt_and_tools():
+def test_requests_carry_system_and_tools():
     client = FakeClient(reply("end_turn", text("ok")))
 
     agent.ask("hi", client=client)
@@ -74,7 +74,7 @@ def test_every_request_carries_the_system_prompt_and_tools():
     }
 
 
-def test_the_loop_stops_after_six_rounds():
+def test_loop_stops_after_six_rounds():
     looping = reply("tool_use", tool_use("payment_timeline", {"payment_id": "pay_1"}))
     client = FakeClient(*[looping] * agent.MAX_ROUNDS)
 
@@ -84,7 +84,7 @@ def test_the_loop_stops_after_six_rounds():
     assert len(client.requests) == agent.MAX_ROUNDS
 
 
-def test_a_refusal_ends_the_loop_without_running_tools():
+def test_refusal_ends_loop():
     client = FakeClient(reply("refusal", tool_use("get_event", {"event_id": "msg_1"})))
 
     result = agent.ask("?", client=client)
@@ -105,7 +105,7 @@ def test_cost_adds_up_across_rounds():
     assert result["cost_usd"] == pytest.approx((2000 * 0.10 + 200 * 0.50) / 1_000_000)
 
 
-def test_tools_return_errors_instead_of_guessing():
+def test_tools_return_errors():
     def run(name, args):
         return json.loads(agent.run_tool(name, args))
 
@@ -139,7 +139,7 @@ def test_model_ids_follow_the_provider(monkeypatch):
     assert agent.model_id("opus") == "claude-opus-5-5"
 
 
-def test_the_claude_api_key_always_comes_from_ssm(monkeypatch):
+def test_api_key_from_ssm(monkeypatch):
     # A key lying around in someone's shell must never be the one that gets billed.
     monkeypatch.setenv("LLM_PROVIDER", "anthropic")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-from-the-shell")

@@ -13,8 +13,7 @@ SNIPPET = 300
 
 
 class _NoRedirects(urllib.request.HTTPRedirectHandler):
-    # A delivery that redirects counts as a failure. Following it would let the destination
-    # point the worker at any other address and show what came back on the dashboard.
+    # Redirects count as failures. Following them would let the app point us anywhere.
     def redirect_request(self, *args, **kwargs):
         return None
 

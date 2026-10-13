@@ -42,8 +42,7 @@ locals {
   region  = data.aws_region.current.region
   models  = ["claude-haiku-5-5", "claude-opus-5-5"]
 
-  # The public demo gets a tight limit, which bounds what a flood of requests can cost. A load
-  # test copy needs room for 1,000 events a second plus their deliveries.
+  # Tight on the public demo to cap what a flood can cost; a load test needs ~2,000 req/s.
   throttle = terraform.workspace == "default" ? { rate = 20, burst = 40 } : { rate = 2000, burst = 2000 }
 
   inbound_secret  = "whsec_${random_bytes.inbound_secret.base64}"

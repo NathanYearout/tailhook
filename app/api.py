@@ -89,8 +89,7 @@ def retry_dead_letters(event):
     pending = []
     for message in messages:
         queued = json.loads(message["Body"])
-        # The DLQ keeps messages for 14 days and the table keeps events for 7, but the message
-        # carries everything needed to store the event again.
+        # rows expire after 7 days, dead letters after 14; rebuild the row from the message
         item = store.get_event(queued["id"])
         if item is None:
             item, _ = store.record_receipt(queued["id"], queued["body"], queued["receipt"])
@@ -111,8 +110,7 @@ def retry_dead_letters(event):
         else:
             sqs.change_message_visibility(QueueUrl=queue, ReceiptHandle=handle, VisibilityTimeout=0)
             failed += 1
-    # SQS's count lags deletes by up to a minute. If the queue came back empty, what's left is
-    # exactly what this retry put back.
+    # SQS's count lags deletes, so if we emptied the queue, count what we put back
     left = failed + skipped if drained else _dead_letter_count()
     return web.response(200, {"delivered": delivered, "failed": failed, "left": left})
 
@@ -129,7 +127,7 @@ def stats(event):
 
 
 def simulate(event):
-    # mixed() spreads events over the 10 minutes after its start; keep them all in the past.
+    # mixed() spans up to 10 minutes from start; keep created_at in the past
     start = store.utcnow() - timedelta(minutes=10)
     deliveries = simulator.mixed(random.randrange(1_000_000), start)
     responses = simulator.send(os.environ["WEBHOOK_URL"], os.environ["INBOUND_SECRET"], deliveries)

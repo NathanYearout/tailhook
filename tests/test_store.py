@@ -24,7 +24,7 @@ def attempt(status_code=200):
     }
 
 
-def test_the_first_receipt_creates_the_event_and_owns_delivery():
+def test_first_receipt_owns_delivery():
     item, created = store.record_receipt("msg_1", body(), "r1", now=T0)
 
     assert created
@@ -37,7 +37,7 @@ def test_the_first_receipt_creates_the_event_and_owns_delivery():
     assert item["shard"] == store.shard_for("msg_1")
 
 
-def test_a_second_receipt_is_counted_but_does_not_take_over():
+def test_second_receipt_only_counts():
     store.record_receipt("msg_1", body(), "r1", now=T0)
     item, created = store.record_receipt("msg_1", body(), "r2", now=later(3))
 
@@ -47,7 +47,7 @@ def test_a_second_receipt_is_counted_but_does_not_take_over():
     assert item["received_at"] == store.iso(T0)
 
 
-def test_the_same_receipt_twice_is_counted_once():
+def test_same_receipt_counted_once():
     store.record_receipt("msg_1", body(), "r1", now=T0)
     item, created = store.record_receipt("msg_1", body(), "r1", now=later(9))
 
@@ -65,13 +65,13 @@ def test_add_attempt_appends_and_sets_status():
     assert [a["status_code"] for a in item["attempts"]] == [500, 200]
 
 
-def test_get_event_ignores_control_items_and_unknown_ids():
+def test_get_event_skips_control_items():
     store.set_merchant_fixed(True)
     assert store.get_event("config#merchant") is None
     assert store.get_event("msg_missing") is None
 
 
-def test_timeline_is_in_created_order_and_flags_early_arrivals():
+def test_timeline_order_and_early_arrivals():
     # The refund was created after the payment but reached us first.
     store.record_receipt("msg_paid", body("payment.succeeded", at=T0), "r1", now=later(60))
     store.record_receipt("msg_refund", body("refund.created", at=later(30)), "r2", now=later(31))
@@ -122,19 +122,19 @@ def test_summary_and_detail():
     assert full["delivery_attempts"][0]["status_code"] == 200
 
 
-def test_the_merchant_switch_starts_broken():
+def test_merchant_starts_broken():
     assert not store.merchant_fixed()
     store.set_merchant_fixed(True)
     assert store.merchant_fixed()
 
 
-def test_the_question_budget_stops_at_the_cap():
+def test_question_budget_cap():
     assert [store.take_question("2026-10-12", cap=2) for _ in range(3)] == [True, True, False]
     assert store.questions_asked("2026-10-12") == 2
     assert store.questions_asked("2026-10-13") == 0
 
 
-def test_a_failed_attempt_never_overwrites_a_delivery():
+def test_failure_doesnt_overwrite_delivered():
     # A replay that started before the worker's delivery landed finishes after it.
     store.record_receipt("msg_1", body(), "r1")
     store.add_attempt("msg_1", attempt(200), "delivered")
@@ -145,7 +145,7 @@ def test_a_failed_attempt_never_overwrites_a_delivery():
     assert [a["status_code"] for a in saved["attempts"]] == [200, 500]
 
 
-def test_only_the_newest_twenty_attempts_are_kept():
+def test_attempts_are_capped():
     store.record_receipt("msg_1", body(), "r1")
     for n in range(25):
         store.add_attempt("msg_1", {**attempt(500), "ms": n}, "retrying")

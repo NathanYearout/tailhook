@@ -18,36 +18,36 @@ def headers(signature=EXPECTED, timestamp=TIMESTAMP):
     }
 
 
-def test_sign_matches_the_spec_example():
+def test_sign_spec_example():
     assert signing.sign(SECRET, MSG_ID, TIMESTAMP, BODY) == EXPECTED
 
 
-def test_verify_accepts_a_valid_signature():
+def test_verify_valid():
     signing.verify(SECRET, headers(), BODY, now=TIMESTAMP)
 
 
-def test_verify_rejects_a_tampered_body():
+def test_verify_tampered_body():
     with pytest.raises(signing.InvalidSignature):
         signing.verify(SECRET, headers(), BODY.replace("2", "3"), now=TIMESTAMP)
 
 
-def test_verify_rejects_old_and_future_timestamps():
+def test_verify_timestamp_window():
     for now in (TIMESTAMP + signing.TOLERANCE + 1, TIMESTAMP - signing.TOLERANCE - 1):
         with pytest.raises(signing.InvalidSignature):
             signing.verify(SECRET, headers(), BODY, now=now)
 
 
-def test_verify_accepts_any_matching_signature_so_keys_can_rotate():
+def test_verify_key_rotation():
     rotated = f"v1,bm90IHRoZSByaWdodCBvbmU= {EXPECTED}"
     signing.verify(SECRET, headers(rotated), BODY, now=TIMESTAMP)
 
 
-def test_verify_rejects_a_malformed_timestamp():
+def test_verify_bad_timestamp():
     with pytest.raises(signing.InvalidSignature):
         signing.verify(SECRET, headers(timestamp="soon"), BODY, now=TIMESTAMP)
 
 
-def test_verify_rejects_missing_headers():
+def test_verify_missing_headers():
     with pytest.raises(signing.InvalidSignature):
         signing.verify(SECRET, {"webhook-id": MSG_ID}, BODY, now=TIMESTAMP)
 

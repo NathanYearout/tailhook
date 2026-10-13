@@ -36,7 +36,7 @@ def payload(payment_id):
     )
 
 
-def test_a_signed_event_is_queued_with_its_receipt():
+def test_signed_event_is_queued():
     response = ingest.handler(request(), None)
 
     assert response["statusCode"] == 202
@@ -44,7 +44,7 @@ def test_a_signed_event_is_queued_with_its_receipt():
     assert queued() == [{"id": "msg_1", "body": BODY, "receipt": "req-1"}]
 
 
-def test_a_bad_signature_is_rejected():
+def test_bad_signature():
     wrong = "whsec_" + base64.b64encode(b"wrong").decode()
     headers = signing.signed_headers(wrong, "msg_1", BODY)
 
@@ -52,32 +52,32 @@ def test_a_bad_signature_is_rejected():
     assert queued() == []
 
 
-def test_missing_headers_are_rejected():
+def test_missing_headers():
     assert ingest.handler(request(headers={"webhook-id": "msg_1"}), None)["statusCode"] == 400
     assert queued() == []
 
 
-def test_a_body_without_a_payment_id_is_rejected():
+def test_missing_payment_id():
     body = json.dumps({"type": "payment.succeeded", "timestamp": "2026-10-12T14:00:00.000Z"})
     assert ingest.handler(request(body), None)["statusCode"] == 400
 
 
-def test_a_payment_id_that_is_not_a_string_is_rejected():
+def test_payment_id_must_be_a_string():
     for payment_id in (None, 42, ""):
         assert ingest.handler(request(payload(payment_id)), None)["statusCode"] == 400
     assert queued() == []
 
 
-def test_a_body_that_is_not_json_is_rejected():
+def test_body_not_json():
     assert ingest.handler(request("not json"), None)["statusCode"] == 400
 
 
-def test_an_oversized_body_is_rejected_before_anything_else():
+def test_oversized_body_rejected_first():
     huge = "x" * (200 * 1024 + 1)
     assert ingest.handler(request(huge, headers={}), None)["statusCode"] == 413
 
 
-def test_non_ascii_text_is_verified_over_utf8_bytes():
+def test_non_ascii_body_verifies():
     body = json.dumps(
         {
             "type": "payment.succeeded",
@@ -91,12 +91,12 @@ def test_non_ascii_text_is_verified_over_utf8_bytes():
     assert queued()[0]["body"] == body
 
 
-def test_a_base64_encoded_body_is_decoded_before_verifying():
+def test_base64_body():
     assert ingest.handler(request(base64_encoded=True), None)["statusCode"] == 202
     assert queued()[0]["body"] == BODY
 
 
-def test_ids_too_long_or_empty_for_a_dynamodb_key_are_rejected():
+def test_key_sizes():
     secret, long = os.environ["INBOUND_SECRET"], "x" * 300
     late = json.dumps({"type": "payment.succeeded", "timestamp": long, "data": {"payment_id": "p"}})
 
@@ -108,7 +108,7 @@ def test_ids_too_long_or_empty_for_a_dynamodb_key_are_rejected():
     assert queued() == []
 
 
-def test_multibyte_text_is_queued_without_growing():
+def test_multibyte_text_not_escaped():
     note = "café ☕ " * 9000
     data = {"payment_id": "pay_1", "note": note}
     event = {"type": "payment.succeeded", "timestamp": "2026-10-12T14:00:00.000Z", "data": data}
