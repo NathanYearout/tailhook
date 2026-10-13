@@ -2,6 +2,8 @@
 
 import json
 import os
+import traceback
+from datetime import UTC, datetime
 
 from app import aws, delivery, store
 
@@ -11,7 +13,12 @@ MAX_ATTEMPTS = 3  # matches maxReceiveCount in the queue's redrive policy
 def handler(event, context):
     failures = []
     for record in event["Records"]:
-        if not process(record):
+        try:
+            ok = process(record)
+        except Exception:  # one bad message retries and dead-letters alone, not with its batch
+            traceback.print_exc()
+            ok = False
+        if not ok:
             failures.append({"itemIdentifier": record["messageId"]})
             backoff(record)
     return {"batchItemFailures": failures}
@@ -20,6 +27,9 @@ def handler(event, context):
 def process(record: dict, now=None) -> bool:
     """Handle one SQS message. True means it's finished and can leave the queue."""
     message = json.loads(record["body"])
+    # When ingest queued it, which is when it arrived. Workers run in parallel and SQS doesn't
+    # keep order, so the time a worker gets to it says nothing about arrival order.
+    now = now or datetime.fromtimestamp(int(record["attributes"]["SentTimestamp"]) / 1000, UTC)
     item, created = store.record_receipt(message["id"], message["body"], message["receipt"], now)
     if created:
         log("stored", item)

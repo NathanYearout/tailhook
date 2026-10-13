@@ -1,5 +1,6 @@
 """Sends an event to the destination app and records how it went."""
 
+import http.client
 import os
 import time
 import urllib.error
@@ -40,7 +41,7 @@ def deliver(item: dict, *, failed_status: str, replay: bool = False) -> bool:
             status_code, reply = response.status, response.read(SNIPPET)
     except urllib.error.HTTPError as error:
         status_code, reply = error.code, error.read(SNIPPET)
-    except OSError as error:  # refused, DNS failure, timeout
+    except (OSError, http.client.HTTPException) as error:  # refused, timeout, not HTTP
         status_code, reply = 0, str(error).encode()
 
     ok = 200 <= status_code < 300

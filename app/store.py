@@ -3,6 +3,7 @@
 import functools
 import json
 import operator
+import os
 import zlib
 from datetime import UTC, datetime, timedelta
 
@@ -36,7 +37,9 @@ def record_receipt(
     receipt that created it owns delivery; every other receipt only gets counted.
     """
     now = now or utcnow()
-    received_at = iso(now)
+    # An SQS redelivery repeats the receipt and the arrival time, so only a fresh id tells
+    # whether this call is the one that stored the event.
+    call = os.urandom(8).hex()
     payload = json.loads(body)
     item = aws.table().update_item(
         Key={"id": event_id},
@@ -50,7 +53,8 @@ def record_receipt(
             " #status = if_not_exists(#status, :pending),"
             " #shard = if_not_exists(#shard, :shard),"
             " attempts = if_not_exists(attempts, :no_attempts),"
-            " expires_at = if_not_exists(expires_at, :expires_at)"
+            " expires_at = if_not_exists(expires_at, :expires_at),"
+            " stored_by = if_not_exists(stored_by, :call)"
             " ADD receipts :receipts"
         ),
         ExpressionAttributeNames={
@@ -63,7 +67,7 @@ def record_receipt(
             ":type": payload["type"],
             ":payment_id": payload["data"]["payment_id"],
             ":created_at": payload["timestamp"],
-            ":received_at": received_at,
+            ":received_at": iso(now),
             ":payload": body,
             ":receipt": receipt,
             ":pending": "pending",
@@ -71,11 +75,11 @@ def record_receipt(
             ":no_attempts": [],
             ":expires_at": int((now + KEEP_FOR).timestamp()),
             ":receipts": {receipt},
+            ":call": call,
         },
         ReturnValues="ALL_NEW",
     )["Attributes"]
-    created = item["owner"] == receipt and item["received_at"] == received_at
-    return item, created
+    return item, item["stored_by"] == call
 
 
 def add_attempt(event_id: str, attempt: dict, status: str) -> None:

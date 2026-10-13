@@ -94,3 +94,26 @@ def test_non_ascii_text_is_verified_over_utf8_bytes():
 def test_a_base64_encoded_body_is_decoded_before_verifying():
     assert ingest.handler(request(base64_encoded=True), None)["statusCode"] == 202
     assert queued()[0]["body"] == BODY
+
+
+def test_ids_too_long_or_empty_for_a_dynamodb_key_are_rejected():
+    secret, long = os.environ["INBOUND_SECRET"], "x" * 300
+    late = json.dumps({"type": "payment.succeeded", "timestamp": long, "data": {"payment_id": "p"}})
+
+    assert ingest.handler(request(payload(long)), None)["statusCode"] == 400
+    assert ingest.handler(request(late), None)["statusCode"] == 400
+    for msg_id in ("msg_" + long, ""):
+        headers = signing.signed_headers(secret, msg_id, BODY)
+        assert ingest.handler(request(headers=headers), None)["statusCode"] == 400
+    assert queued() == []
+
+
+def test_multibyte_text_is_queued_without_growing():
+    note = "café ☕ " * 9000
+    data = {"payment_id": "pay_1", "note": note}
+    event = {"type": "payment.succeeded", "timestamp": "2026-10-12T14:00:00.000Z", "data": data}
+    body = json.dumps(event, ensure_ascii=False)
+
+    assert ingest.handler(request(body), None)["statusCode"] == 202
+    raw = aws.sqs().receive_message(QueueUrl=os.environ["QUEUE_URL"])["Messages"][0]["Body"]
+    assert len(raw.encode()) < 1.1 * len(body.encode())

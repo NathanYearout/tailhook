@@ -13,7 +13,32 @@ def record(receipt="r1", attempt=1, msg_id="msg_1"):
         "messageId": f"{receipt}-{attempt}",
         "receiptHandle": "unused",
         "body": json.dumps({"id": msg_id, "body": BODY, "receipt": receipt}),
-        "attributes": {"ApproximateReceiveCount": str(attempt)},
+        "attributes": {
+            "ApproximateReceiveCount": str(attempt),
+            "SentTimestamp": "1791813600000",  # 2026-10-12T14:00:00Z, when ingest queued it
+        },
+    }
+
+
+def sqs_batch(*bodies):
+    """Queue the bodies and receive them back as the records of one Lambda event."""
+    sqs, queue = aws.sqs(), os.environ["QUEUE_URL"]
+    for body in bodies:
+        sqs.send_message(QueueUrl=queue, MessageBody=body)
+    messages = sqs.receive_message(
+        QueueUrl=queue, MaxNumberOfMessages=10, MessageSystemAttributeNames=["All"]
+    )["Messages"]
+    messages.sort(key=lambda m: bodies.index(m["Body"]))
+    return {
+        "Records": [
+            {
+                "messageId": m["MessageId"],
+                "receiptHandle": m["ReceiptHandle"],
+                "body": m["Body"],
+                "attributes": m["Attributes"],
+            }
+            for m in messages
+        ]
     }
 
 
@@ -93,3 +118,29 @@ def test_the_handler_reports_only_the_failed_message(destination):
     result = worker.handler(event, None)
 
     assert len(result["batchItemFailures"]) == 1
+
+
+def test_received_at_is_when_ingest_queued_the_event_not_when_the_worker_ran(destination):
+    worker.process(record())
+
+    assert store.get_event("msg_1")["received_at"] == "2026-10-12T14:00:00.000Z"
+
+
+def test_an_sqs_redelivery_is_not_logged_as_stored_again(destination, capsys):
+    destination.replies.append(500)
+
+    worker.process(record(attempt=1))
+    worker.process(record(attempt=2))
+
+    outcomes = [json.loads(line)["outcome"] for line in capsys.readouterr().out.splitlines()]
+    assert outcomes.count("stored") == 1
+
+
+def test_one_bad_message_does_not_strand_the_rest_of_its_batch(destination):
+    good = json.dumps({"id": "msg_2", "body": BODY, "receipt": "r2"})
+    event = sqs_batch("not json", good)
+
+    result = worker.handler(event, None)
+
+    assert result["batchItemFailures"] == [{"itemIdentifier": event["Records"][0]["messageId"]}]
+    assert store.get_event("msg_2")["status"] == "delivered"

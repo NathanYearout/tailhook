@@ -6,6 +6,7 @@ import os
 from app import aws, signing, web
 
 MAX_BODY = 200 * 1024
+MAX_KEY = 256  # bytes, well inside DynamoDB's key limits
 REQUIRED_HEADERS = ("webhook-id", "webhook-timestamp", "webhook-signature")
 
 
@@ -22,22 +23,28 @@ def handler(event, context):
     except signing.InvalidSignature as error:
         return web.error(401, str(error))
 
-    if not _well_formed(body):
-        return web.error(400, "body must be JSON with type, timestamp and data.payment_id")
+    if not _well_formed(headers["webhook-id"], body):
+        return web.error(
+            400, "webhook-id, type, timestamp and data.payment_id must be 1 to 256 bytes"
+        )
 
     receipt = event["requestContext"]["requestId"]
     aws.sqs().send_message(
         QueueUrl=os.environ["QUEUE_URL"],
-        MessageBody=json.dumps({"id": headers["webhook-id"], "body": body, "receipt": receipt}),
+        MessageBody=json.dumps(
+            {"id": headers["webhook-id"], "body": body, "receipt": receipt},
+            ensure_ascii=False,  # escaping would triple non-ASCII text and could overflow SQS
+        ),
     )
     return web.response(202, {"receipt": receipt})
 
 
-def _well_formed(body: str) -> bool:
-    # These three become DynamoDB keys, so they have to be non-empty strings.
+def _well_formed(msg_id: str, body: str) -> bool:
+    # The id, payment_id and timestamp become DynamoDB keys, so they have to be short,
+    # non-empty strings.
     try:
         payload = json.loads(body)
-        fields = (payload["type"], payload["timestamp"], payload["data"]["payment_id"])
+        fields = (msg_id, payload["type"], payload["timestamp"], payload["data"]["payment_id"])
     except (ValueError, KeyError, TypeError):
         return False
-    return all(isinstance(field, str) and field for field in fields)
+    return all(isinstance(field, str) and 0 < len(field.encode()) <= MAX_KEY for field in fields)
