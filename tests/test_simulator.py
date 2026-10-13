@@ -1,7 +1,10 @@
 import asyncio
 import json
 import os
+import threading
+import time
 from datetime import UTC, datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from app import signing, simulator
 from app.declines import DECLINE_CODES
@@ -76,3 +79,36 @@ def test_load_sends_unique_signed_events_and_reports_latency(destination):
     assert result["statuses"] == {"200": 20}
     assert result["p50_ms"] <= result["p99_ms"]
     assert len({headers["webhook-id"] for headers, _ in destination.received}) == 20
+
+
+def test_load_caps_requests_in_flight(monkeypatch):
+    # A slow app makes requests pile up. The generator has to hold them back itself: handing
+    # thousands to httpx's pool at once makes the pool spend its time scanning its own queue.
+    monkeypatch.setattr(simulator, "MAX_IN_FLIGHT", 5)
+    lock, live, peak = threading.Lock(), [0], [0]
+
+    class SlowApp(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers["content-length"]))
+            with lock:
+                live[0] += 1
+                peak[0] = max(peak[0], live[0])
+            time.sleep(0.1)
+            with lock:
+                live[0] -= 1
+            self.send_response(202)
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), SlowApp)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_port}/"
+    try:
+        result = asyncio.run(simulator.load(url, os.environ["INBOUND_SECRET"], 100, 1, "t2"))
+    finally:
+        server.shutdown()
+
+    assert result["statuses"] == {"202": 100}
+    assert peak[0] <= 5

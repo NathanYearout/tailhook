@@ -26,6 +26,9 @@ from app.store import iso, utcnow
 
 CARDS = [("visa", "4242"), ("mastercard", "4444"), ("amex", "0005"), ("discover", "1117")]
 ALPHABET = string.ascii_letters + string.digits
+# ponytail: tops out near MAX_IN_FLIGHT / latency (about 2,000/s at 100 ms); run more generators
+# to go higher.
+MAX_IN_FLIGHT = 200
 
 
 @dataclass(frozen=True)
@@ -130,22 +133,26 @@ async def load(url: str, secret: str, rate: int, duration: int, run: str) -> dic
     total = rate * duration
     latencies: list[float] = []
     statuses: Counter = Counter()
-    limits = httpx.Limits(max_connections=1000, max_keepalive_connections=1000)
+    limits = httpx.Limits(max_connections=MAX_IN_FLIGHT, max_keepalive_connections=MAX_IN_FLIGHT)
+    # Requests wait here rather than in httpx's pool, which rescans its whole queue every time
+    # a request finishes.
+    gate = asyncio.Semaphore(MAX_IN_FLIGHT)
 
     async with httpx.AsyncClient(limits=limits, timeout=10) as client:
 
         async def one(n: int) -> None:
             msg_id = f"msg_{run}_{n}"
             body = event_body("payment.succeeded", f"pay_{run}_{n}", utcnow(), run=run)
-            started = time.perf_counter()
-            try:
-                response = await client.post(
-                    url, content=body, headers=signing.signed_headers(secret, msg_id, body)
-                )
-                statuses[response.status_code] += 1
-            except httpx.HTTPError as error:
-                statuses[type(error).__name__] += 1
-            latencies.append(time.perf_counter() - started)
+            async with gate:
+                started = time.perf_counter()
+                try:
+                    response = await client.post(
+                        url, content=body, headers=signing.signed_headers(secret, msg_id, body)
+                    )
+                    statuses[response.status_code] += 1
+                except httpx.HTTPError as error:
+                    statuses[type(error).__name__] += 1
+                latencies.append(time.perf_counter() - started)
 
         began = time.perf_counter()
         tasks = []
