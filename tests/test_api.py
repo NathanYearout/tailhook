@@ -218,3 +218,15 @@ def test_ask_reports_a_model_outage(monkeypatch):
         502,
         {"error": "the model is unavailable right now"},
     )
+
+
+def test_the_dashboard_is_served_as_html():
+    status, page = call("GET /")
+    assert status == 200
+    assert "<title>tailhook</title>" in page
+
+
+def test_the_dashboard_never_renders_event_text_as_html():
+    _, page = call("GET /")
+    for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"):
+        assert sink not in page

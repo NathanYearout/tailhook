@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tailhook</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a64; --line: #e3e1da;
+    --accent: #2f5bd3; --on-accent: #ffffff; --ok: #1f7a4d; --warn: #a15c00; --bad: #b42318;
+    --ok-bg: #e5f3ea; --warn-bg: #fbefd9; --bad-bg: #fbe4e2; --idle-bg: #ecebe6;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141413; --panel: #1d1d1b; --ink: #ecebe6; --muted: #9c9a92; --line: #2e2d2a;
+      --accent: #7c9bff; --on-accent: #141413; --ok: #5cc28d; --warn: #e3a54a; --bad: #f2867d;
+      --ok-bg: #18301f; --warn-bg: #33270f; --bad-bg: #3a1a17; --idle-bg: #2a2926;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header.top { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; justify-content: space-between; padding: 16px 24px; border-bottom: 1px solid var(--line); }
+  .brand h1 { margin: 0; font-size: 20px; letter-spacing: -0.01em; }
+  .brand p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink); padding: 7px 12px; border-radius: 8px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button:disabled { opacity: 0.55; cursor: progress; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .count { display: inline-block; min-width: 1.6em; margin-left: 6px; padding: 0 6px; border-radius: 999px; background: var(--idle-bg); font-size: 12px; text-align: center; }
+  .count.hot { background: var(--bad-bg); color: var(--bad); }
+  main { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 16px; padding: 16px 24px 32px; }
+  section.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; min-width: 0; }
+  .panel > h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  #feed { list-style: none; margin: 0; padding: 0; max-height: 72vh; overflow-y: auto; }
+  #feed li.row { display: grid; grid-template-columns: 84px minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; padding: 8px 6px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  #feed li.row:hover, #feed li.selected { background: var(--bg); }
+  .what { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
+  time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  code { font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+  .chip, .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; white-space: nowrap; }
+  .chip { text-align: center; background: var(--idle-bg); }
+  .chip.delivered { background: var(--ok-bg); color: var(--ok); }
+  .chip.retrying { background: var(--warn-bg); color: var(--warn); }
+  .chip.dead { background: var(--bad-bg); color: var(--bad); }
+  .badge { border: 1px solid var(--line); color: var(--muted); }
+  .badge.warn { border-color: var(--warn); color: var(--warn); }
+  .empty, .muted { color: var(--muted); }
+  .small { font-size: 12.5px; }
+  .side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  #detail h3 { margin: 16px 0 6px; font-size: 13px; color: var(--muted); font-weight: 600; }
+  #detail header { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  #detail header h2 { margin: 0; font-size: 17px; }
+  ol.plain { list-style: none; margin: 0; padding: 0; }
+  ol.plain li { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 5px 0; border-bottom: 1px dashed var(--line); }
+  ol.plain li.current { font-weight: 600; }
+  .status-code { font-family: var(--mono); font-weight: 600; }
+  .status-code.ok { color: var(--ok); }
+  .status-code.bad { color: var(--bad); }
+  pre { margin: 0; padding: 10px; background: var(--bg); border-radius: 8px; overflow-x: auto; font: 12.5px/1.4 var(--mono); }
+  form#ask { display: flex; gap: 8px; }
+  form#ask input { flex: 1; min-width: 0; font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  .suggestions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .suggestions button { font-size: 12.5px; padding: 4px 9px; }
+  #answer { margin-top: 12px; }
+  #answer > p:first-child { white-space: pre-wrap; }
+  .error { color: var(--bad); }
+  #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 9px 14px; border-radius: 8px; font-size: 14px; opacity: 0; transition: opacity 0.2s; pointer-events: none; max-width: calc(100% - 32px); }
+  #toast.show { opacity: 1; }
+  #toast.bad { background: var(--bad); color: #fff; }
+  #offline { color: var(--bad); font-size: 13px; }
+  @media (max-width: 900px) {
+    header.top, main { padding-left: 16px; padding-right: 16px; }
+    main { grid-template-columns: minmax(0, 1fr); }
+    #feed { max-height: 50vh; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <h1>tailhook</h1>
+    <p>A webhook debugger for payment events. Send traffic, break something, ask why.</p>
+  </div>
+  <div class="actions">
+    <span id="offline" hidden>Can't reach the API right now</span>
+    <button id="send" class="primary">Send traffic</button>
+    <button id="fix">Ship the fix</button>
+    <button id="retry">Retry dead letters<span id="dead" class="count">0</span></button>
+  </div>
+</header>
+<main>
+  <section class="panel">
+    <h2>Events</h2>
+    <ul id="feed"></ul>
+  </section>
+  <div class="side">
+    <section class="panel">
+      <h2>Ask the agent</h2>
+      <form id="ask">
+        <input id="question" maxlength="500" placeholder="Why did pay_… fail?" aria-label="Question" autocomplete="off">
+        <button type="submit">Ask</button>
+      </form>
+      <div id="suggestions" class="suggestions"></div>
+      <div id="answer"></div>
+      <p id="budget" class="muted small"></p>
+    </section>
+    <section class="panel" id="detail">
+      <p class="muted">Pick an event to see its payload, delivery attempts and the payment's timeline.</p>
+    </section>
+  </div>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+<script>
+const $ = (selector) => document.querySelector(selector);
+let selected = null;
+let merchantFixed = false;
+
+// Builds DOM nodes. Strings always become text nodes, so event data is never parsed as HTML.
+function el(tag, props = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(props)) {
+    if (key === "class") node.className = value;
+    else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+    else node.setAttribute(key, value);
+  }
+  for (const child of children.flat()) {
+    if (child === null || child === undefined || child === false || child === "") continue;
+    node.append(child instanceof Node ? child : String(child));
+  }
+  return node;
+}
+
+async function api(path, body) {
+  const options = body === undefined ? {} : {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  };
+  const response = await fetch(path, options);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `${response.status} ${response.statusText}`);
+  return data;
+}
+
+const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+function toast(message, bad = false) {
+  const box = $("#toast");
+  box.textContent = message;
+  box.className = bad ? "show bad" : "show";
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => { box.className = ""; }, 3500);
+}
+
+// Same rule as the server: an event is early if it arrived before one created ahead of it.
+function earlyArrivals(rows) {
+  const byPayment = new Map();
+  for (const row of rows) {
+    if (!byPayment.has(row.payment_id)) byPayment.set(row.payment_id, []);
+    byPayment.get(row.payment_id).push(row);
+  }
+  const early = new Set();
+  for (const events of byPayment.values()) {
+    events.sort((a, b) => a.created_at.localeCompare(b.created_at));
+    let latest = "";
+    for (const event of events) {
+      if (event.received_at < latest) early.add(event.id);
+      if (event.received_at > latest) latest = event.received_at;
+    }
+  }
+  return early;
+}
+
+function renderFeed(rows) {
+  if (!rows.length) {
+    $("#feed").replaceChildren(el("li", { class: "empty" }, "No events yet. Press Send traffic."));
+    return;
+  }
+  const early = earlyArrivals(rows);
+  $("#feed").replaceChildren(...rows.map((row) =>
+    el("li", { class: row.id === selected ? "row selected" : "row", onclick: () => select(row.id) },
+      el("span", { class: `chip ${row.status}` }, row.status),
+      el("span", { class: "what" },
+        el("strong", {}, row.type),
+        el("code", {}, row.payment_id),
+        row.decline_code && el("span", { class: "badge" }, `declined ${row.decline_code}`),
+        row.copies_received > 1 && el("span", { class: "badge warn" }, `×${row.copies_received} received`),
+        early.has(row.id) && el("span", { class: "badge warn" }, "out of order")),
+      el("time", { datetime: row.received_at }, clock(row.received_at)))));
+  renderSuggestions(rows);
+}
+
+function renderSuggestions(rows) {
+  const failed = rows.find((row) => row.type === "payment.failed");
+  const deadRefund = rows.find((row) => row.type === "refund.created" && row.status === "dead");
+  const twice = rows.find((row) => row.copies_received > 1);
+  const questions = [
+    failed && `Why did ${failed.payment_id} fail?`,
+    deadRefund && `Why didn't my app get the refund for ${deadRefund.payment_id}?`,
+    twice && `Did my app get ${twice.payment_id}'s ${twice.type} twice?`,
+  ].filter(Boolean);
+  $("#suggestions").replaceChildren(...questions.map((question) =>
+    el("button", { type: "button", onclick: () => { $("#question").value = question; $("#question").focus(); } }, question)));
+}
+
+function renderStats(stats) {
+  merchantFixed = stats.merchant_fixed;
+  $("#dead").textContent = stats.dead_letters;
+  $("#dead").className = stats.dead_letters ? "count hot" : "count";
+  $("#fix").textContent = merchantFixed ? "Bring the bug back" : "Ship the fix";
+  $("#budget").textContent = `${stats.questions_left} questions left today on the public demo.`;
+}
+
+async function refresh() {
+  try {
+    const [rows, stats] = await Promise.all([api("/api/events?limit=60"), api("/api/stats")]);
+    renderFeed(rows);
+    renderStats(stats);
+    $("#offline").hidden = true;
+  } catch {
+    $("#offline").hidden = false;
+  }
+}
+
+async function select(id) {
+  selected = id;
+  try {
+    const event = await api(`/api/events/${encodeURIComponent(id)}`);
+    const timeline = await api(`/api/payments/${encodeURIComponent(event.payment_id)}`);
+    renderDetail(event, timeline);
+  } catch (error) {
+    toast(error.message, true);
+  }
+  refresh();
+}
+
+function renderDetail(event, timeline) {
+  const copies = event.copies_received === 1 ? "1 copy" : `${event.copies_received} copies`;
+  const attempts = event.delivery_attempts.map((attempt) => {
+    const ok = attempt.status_code >= 200 && attempt.status_code < 300;
+    return el("li", {},
+      el("span", { class: `status-code ${ok ? "ok" : "bad"}` }, attempt.status_code || "no response"),
+      el("span", { class: "muted small" }, `${attempt.ms} ms${attempt.replay ? " · replay" : ""}`),
+      el("code", {}, attempt.body));
+  });
+  $("#detail").replaceChildren(
+    el("header", {}, el("h2", {}, event.type), el("code", {}, event.id)),
+    el("p", { class: "muted small" },
+      `${event.payment_id} · created ${clock(event.created_at)} · received ${clock(event.received_at)} · ${copies} received`),
+    el("h3", {}, "Delivery attempts"),
+    attempts.length ? el("ol", { class: "plain" }, attempts) : el("p", { class: "muted" }, "Not delivered yet."),
+    el("h3", {}, "Payment timeline, in created order"),
+    el("ol", { class: "plain" }, timeline.map((row) =>
+      el("li", { class: row.id === event.id ? "current" : "" },
+        el("span", {}, row.type),
+        row.out_of_order && el("span", { class: "badge warn" }, "arrived early"),
+        el("span", { class: `chip ${row.status}` }, row.status)))),
+    el("p", {}, el("button", { onclick: (e) => replay(e.currentTarget, event.payment_id) }, "Replay this payment in order")),
+    el("h3", {}, "Payload"),
+    el("pre", {}, JSON.stringify(event.payload, null, 2)));
+}
+
+async function act(button, action) {
+  button.disabled = true;
+  try {
+    toast(await action());
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+    refresh();
+  }
+}
+
+function replay(button, paymentId) {
+  act(button, async () => {
+    const result = await api(`/api/payments/${encodeURIComponent(paymentId)}/replay`, {});
+    const failed = result.results.find((r) => !r.ok);
+    if (selected) select(selected);
+    return failed ? `Replay stopped: ${failed.type} still fails.` : `Replayed ${result.results.length} events in order.`;
+  });
+}
+
+$("#send").addEventListener("click", (e) => act(e.currentTarget, async () => {
+  const result = await api("/api/simulate", {});
+  return `Sent ${result.sent} events.`;
+}));
+
+$("#fix").addEventListener("click", (e) => act(e.currentTarget, async () => {
+  const result = await api("/api/merchant", { fixed: !merchantFixed });
+  return result.fixed ? "Fix shipped. Refunds go through now." : "Bug is back. Refunds will fail.";
+}));
+
+$("#retry").addEventListener("click", (e) => act(e.currentTarget, async () => {
+  const result = await api("/api/dead-letters/retry", {});
+  return `${result.delivered} delivered, ${result.failed} still failing, ${result.left} left.`;
+}));
+
+$("#ask").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const question = $("#question").value.trim();
+  if (!question) return;
+  const button = $("#ask button");
+  button.disabled = true;
+  $("#answer").replaceChildren(el("p", { class: "muted" }, "Looking through the events…"));
+  try {
+    const result = await api("/api/ask", { question });
+    const tokens = result.usage.input_tokens + result.usage.output_tokens;
+    $("#answer").replaceChildren(
+      el("p", {}, result.answer),
+      el("ol", { class: "plain small" }, result.steps.map((step) =>
+        el("li", {},
+          el("code", {}, step.tool),
+          el("span", { class: "muted" }, Object.values(step.input).filter((v) => v !== null).join(", ")),
+          el("span", { class: "muted" }, `${step.ms} ms`)))),
+      el("p", { class: "muted small" },
+        `${result.model} · ${tokens} tokens · $${result.cost_usd.toFixed(4)} · ${(result.ms / 1000).toFixed(1)} s`));
+  } catch (error) {
+    $("#answer").replaceChildren(el("p", { class: "error" }, error.message));
+  } finally {
+    button.disabled = false;
+    refresh();
+  }
+});
+
+refresh();
+setInterval(() => { if (!document.hidden) refresh(); }, 2000);
+</script>
+</body>
+</html>

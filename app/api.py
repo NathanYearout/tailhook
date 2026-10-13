@@ -4,6 +4,8 @@ import json
 import os
 import random
 import time
+from functools import cache
+from pathlib import Path
 
 import anthropic
 
@@ -20,6 +22,15 @@ def handler(event, context):
     if route is None:
         return web.error(404, "not found")
     return route(event)
+
+
+@cache
+def _page() -> str:
+    return (Path(__file__).parent / "static" / "index.html").read_text()
+
+
+def dashboard(event):
+    return web.response(200, _page(), "text/html; charset=utf-8")
 
 
 def list_events(event):
@@ -173,6 +184,7 @@ def _dead_letter_count() -> int:
 
 
 ROUTES = {
+    "GET /": dashboard,
     "GET /api/events": list_events,
     "GET /api/events/{id}": show_event,
     "GET /api/payments/{id}": show_payment,
