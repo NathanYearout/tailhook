@@ -80,6 +80,25 @@ that receipt only if no owner exists yet. Whichever receipt owns the event deliv
 including on SQS retries; every other receipt is just counted. See
 [`record_receipt`](app/store.py) and [`worker.process`](app/worker.py).
 
+## Delivery guarantees
+
+- **At least once, not exactly once.** A worker can crash after your app answered but before
+  tailhook recorded it, and replays re-send on purpose. Every delivery keeps the sender's
+  `webhook-id` and is signed with tailhook's own secret, so verify the signature and dedupe on
+  that id.
+- **Duplicates are caught for 7 days.** Events leave the table after 7 days (DynamoDB TTL). A
+  sender retry inside that window is counted and dropped; one that arrives later is treated
+  as a new event.
+- **A dead-lettered event stays put.** Further copies from the sender are only counted, so
+  nothing reaches your app until someone presses Retry dead letters or replays the payment.
+  Dead letters wait 14 days, and a retry still delivers them after the event has left the
+  table.
+- **A delivery that landed stands.** If a replay and a worker retry race, a failed attempt
+  never sets a delivered event back to retrying.
+- **Order holds only on replay.** The queue and the workers run in parallel, so your app can
+  get a refund before its payment. Replaying a payment sends its events in created order and
+  stops at the first failure.
+
 ## Why SQS and DynamoDB
 
 - **SQS between ingest and processing.** Ingest never waits on the database or your app, so a
