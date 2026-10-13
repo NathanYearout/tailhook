@@ -1,32 +1,66 @@
-# tailhook
+<h1 align="center">tailhook</h1>
 
-A webhook debugger for payment events, with an agent that tells you why a charge failed.
+<p align="center">
+  A webhook debugger for payment events, with an agent that tells you why a charge failed.
+</p>
 
-[![ci](https://github.com/NathanYearout/tailhook/actions/workflows/ci.yml/badge.svg)](https://github.com/NathanYearout/tailhook/actions/workflows/ci.yml) · **[Live demo](https://su5zcwu6yd.execute-api.us-east-2.amazonaws.com)**
+<p align="center">
+  <a href="https://github.com/NathanYearout/tailhook/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/NathanYearout/tailhook/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Python 3.14" src="https://img.shields.io/badge/python-3.14-3776AB?logo=python&logoColor=white">
+  <img alt="Terraform" src="https://img.shields.io/badge/terraform-1.14-844FBA?logo=terraform&logoColor=white">
+  <img alt="AWS: Lambda, SQS, DynamoDB" src="https://img.shields.io/badge/AWS-Lambda%20%C2%B7%20SQS%20%C2%B7%20DynamoDB-FF9900">
+</p>
 
-tailhook sits between a webhook sender and your app. It checks each event's signature,
-stores it once no matter how many times it's delivered, forwards it to your app with retries,
-and parks events that keep failing in a dead-letter queue. When something goes wrong you can
-replay a payment's events in the order they actually happened, or ask the agent things like
-"why didn't my app get the refund for pay_9Q?"
+<p align="center">
+  <a href="https://su5zcwu6yd.execute-api.us-east-2.amazonaws.com"><b>Live demo</b></a> ·
+  <a href="#how-duplicates-are-handled">How duplicates are handled</a> ·
+  <a href="#results">Load test and evals</a> ·
+  <a href="docs/design.md">Design doc</a>
+</p>
+
+![A refund fails three times and lands in the dead-letter queue; after shipping the fix, retrying delivers it](docs/demo.gif)
+
+tailhook sits between a webhook sender and your app. It checks each event's signature, stores
+it once no matter how many times it's delivered, forwards it to your app with retries, and
+parks events that keep failing in a dead-letter queue.
+
+## What you can do with it
+
+- **Watch events arrive** with their delivery status, decline codes, duplicate counts and
+  out-of-order flags.
+- **Open any event** to see its payload, every delivery attempt with your app's response, and
+  the payment's timeline in the order things actually happened.
+- **Break it, then fix it.** The demo's stand-in merchant app has a planted bug: refunds crash
+  it with `KeyError: 'original_amount'`. They're retried three times, land in the dead-letter
+  queue and trip a CloudWatch alarm. Ship the fix, press Retry dead letters, and they go
+  through.
+- **Replay a payment** in created order. Replay stops at the first failure, so a refund can't
+  overtake the payment it refunds.
+- **Ask the agent** things like "why didn't my app get the refund for pay_9Q?" Claude answers
+  with four read-only tools over what tailhook recorded, and cites the events it used.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dead-letter-dark.png">
+  <img alt="A dead refund: three 500 responses with KeyError: 'original_amount', and its payment's timeline" src="docs/screenshots/dead-letter-light.png">
+</picture>
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    S[sender] -- POST /webhooks --> G1[API Gateway]
-    G1 --> I[ingest λ]
-    I --> Q[(SQS events)]
-    Q --> W[worker λ]
-    W --> D[(DynamoDB)]
-    W -- signed POST --> A[your app]
-    Q -- after 3 failures --> DLQ[(SQS dead letters)]
-    DLQ --> AL[CloudWatch alarm]
-    B[dashboard] --> G2[API Gateway] --> P[api λ]
-    P --> D
-    P --> DLQ
-    P -- replay --> A
-    P -- tool calls --> C[Claude]
+    sender([webhook sender]) -- "POST /webhooks" --> ingest[ingest λ]
+    ingest --> events[(SQS events)]
+    events --> worker[worker λ]
+    worker -- "signed POST" --> app([your app])
+    worker --> table[(DynamoDB)]
+    events -. "after 3 failures" .-> dlq[(SQS dead letters)]
+    dlq -.-> alarm[CloudWatch alarm]
+
+    browser([dashboard]) --> api[api λ]
+    dlq -- "retry" --> api
+    api -- "replay, retry" --> app
+    api --> table
+    api -- "tool calls" --> claude[Claude on Bedrock]
 ```
 
 Everything is in [`infra/main.tf`](infra/main.tf) and deploys with `make deploy`. The design
@@ -49,8 +83,8 @@ including on SQS retries; every other receipt is just counted. See
 ## Why SQS and DynamoDB
 
 - **SQS between ingest and processing.** Ingest never waits on the database or your app, so a
-  slow or broken app can't make the sender time out. Retries, backoff and a dead-letter queue
-  come from the redrive policy rather than code.
+  slow or broken app can't make the sender time out. Retries and the dead-letter queue come
+  from the redrive policy; the worker only sets the backoff between tries.
 - **DynamoDB keyed on the idempotency key.** "Have I seen this, and who delivers it?" is one
   conditional write, with no locks and no second round trip. Two indexes cover the reads:
   a payment's events in created order, and the newest events. The newest-events index is
@@ -100,7 +134,8 @@ make destroy && terraform -chdir=infra workspace select default
 ```
 
 The Makefile defaults to the AWS profile `personal` in `us-east-2`; override with
-`make deploy AWS_PROFILE=... AWS_REGION=...`.
+`make deploy AWS_PROFILE=... AWS_REGION=...`. Every route is throttled and Terraform adds a
+$5 monthly budget alert, but the demo is public, so set a spend limit on the account too.
 
 ## What I'd build next
 
