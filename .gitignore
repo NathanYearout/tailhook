@@ -9,3 +9,4 @@ build/
 *.tfstate
 *.tfstate.*
 *.tfplan
+infra/terraform.tfvars

@@ -1,0 +1,32 @@
+[project]
+name = "tailhook"
+version = "0.1.0"
+description = "A webhook debugger for payment events, with an agent that explains what went wrong."
+requires-python = ">=3.14"
+dependencies = [
+    "anthropic[bedrock]>=1.13,<2",
+    "boto3>=1.40",
+]
+
+[dependency-groups]
+dev = [
+    "botocore[crt]",
+    "httpx>=0.28",
+    "moto[dynamodb,server]>=5.2",
+    "pytest>=9",
+    "ruff>=0.17",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
