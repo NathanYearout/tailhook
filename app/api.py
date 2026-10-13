@@ -78,6 +78,7 @@ def retry_dead_letters(event):
             QueueUrl=queue,
             MaxNumberOfMessages=min(10, RETRY_BATCH - len(messages)),
             VisibilityTimeout=60,
+            WaitTimeSeconds=1,  # a short poll can come back empty while messages remain
         ).get("Messages", [])
         if not batch:
             break
