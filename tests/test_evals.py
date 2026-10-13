@@ -1,4 +1,14 @@
+import json
+from pathlib import Path
+
 from evals.run import grade
+
+CASES = {
+    case["name"]: case
+    for case in json.loads((Path(__file__).parents[1] / "evals" / "cases.json").read_text())[
+        "cases"
+    ]
+}
 
 CASE = {
     "must_include": ["500", ["once", "one time"]],
@@ -26,3 +36,32 @@ def test_each_broken_rule_is_reported():
         "didn't call get_event",
         "said 'all clear'",
     ]
+
+
+# For each case: a right answer, then the opposite in words the string checks used to accept.
+FLIPS = {
+    "worth-retrying": (
+        "Yes. Code 91 means the issuer couldn't be reached, which is temporary, so retry pay_e4.",
+        "Not worth retrying: code 91 on pay_e4 won't clear by itself.",
+    ),
+    "declined-then-paid": (
+        "Yes. The first try was declined with 05, then msg_e2b succeeded.",
+        "No, it never went through; msg_e2b was declined as well.",
+    ),
+    "duplicate-not-double-delivered": (
+        "No. Two copies of msg_e11a arrived, but your app got it only once.",
+        "Yes, your app received it twice: msg_e11a went out once at 14:01 and once at 14:02.",
+    ),
+    "refund-after-the-fix": (
+        "Yes, msg_e8b was delivered on the first attempt with a 200.",
+        "No, your app never received it.",
+    ),
+}
+
+
+def test_answers_that_flip_the_meaning_fail():
+    for name, (right, wrong) in FLIPS.items():
+        case = CASES[name]
+        tools = case.get("must_call", [])
+        assert grade(case, outcome(right, *tools)) == [], name
+        assert grade(case, outcome(wrong, *tools)) != [], name

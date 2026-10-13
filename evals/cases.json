@@ -23,6 +23,7 @@
       ],
       "question": "Did the customer's payment pay_e2 eventually go through?",
       "must_include": [["yes", "succeeded", "went through"]],
+      "must_not_include": ["never succeeded", "never went through"],
       "must_cite": ["msg_e2b"]
     },
     {
@@ -39,6 +40,7 @@
       "events": [{"id": "msg_e4a", "type": "payment.failed", "payment_id": "pay_e4", "t": 150, "code": "91"}],
       "question": "Is it worth retrying payment pay_e4?",
       "must_include": ["91", ["yes", "retry", "try again"]],
+      "must_not_include": ["not worth retrying", "no point retrying", "no point in retrying", "shouldn't retry", "should not retry"],
       "must_call": ["explain_decline_code"]
     },
     {
@@ -87,7 +89,7 @@
       ],
       "question": "Did my app receive the refund event for pay_e8?",
       "must_include": [["yes", "delivered", "received"]],
-      "must_not_include": ["dead-letter", "dead letter"]
+      "must_not_include": ["dead-letter", "dead letter", "never received", "didn't receive", "did not receive", "wasn't delivered", "was not delivered"]
     },
     {
       "name": "attempt-history",
@@ -113,6 +115,7 @@
       "events": [{"id": "msg_e11a", "type": "payment.succeeded", "payment_id": "pay_e11", "t": 100, "copies": 2}],
       "question": "We saw duplicate webhooks for pay_e11. Did my app receive that event twice?",
       "must_include": [["only once", "just once", "once"]],
+      "must_not_include": ["yes,", "received it twice", "got it twice"],
       "must_cite": ["msg_e11a"]
     },
     {
