@@ -3,10 +3,13 @@
 import json
 import os
 import random
+import time
 
-from app import aws, signing, simulator, store, web
+from app import aws, delivery, signing, simulator, store, web
 
 DAILY_QUESTIONS = 100
+RETRY_BATCH = 25
+RETRY_SECONDS = 20  # stay well inside API Gateway's 30 second limit
 
 
 def handler(event, context):
@@ -37,6 +40,56 @@ def show_payment(event):
     if not items:
         return web.error(404, "no events for that payment")
     return web.response(200, [store.summary(item) for item in items])
+
+
+def replay_payment(event):
+    items = store.timeline(event["pathParameters"]["id"])
+    if not items:
+        return web.error(404, "no events for that payment")
+    results = []
+    for item in items:
+        ok = delivery.deliver(item, failed_status=item["status"], replay=True)
+        results.append({"id": item["id"], "type": item["type"], "ok": ok})
+        if not ok:
+            break  # later events must not overtake the one that failed
+    complete = len(results) == len(items) and results[-1]["ok"]
+    return web.response(200, {"results": results, "complete": complete})
+
+
+def retry_dead_letters(event):
+    sqs, queue = aws.sqs(), os.environ["DLQ_URL"]
+    messages = []
+    while len(messages) < RETRY_BATCH:
+        batch = sqs.receive_message(
+            QueueUrl=queue,
+            MaxNumberOfMessages=min(10, RETRY_BATCH - len(messages)),
+            VisibilityTimeout=60,
+        ).get("Messages", [])
+        if not batch:
+            break
+        messages += batch
+
+    pending = [(store.get_event(json.loads(m["Body"])["id"]), m) for m in messages]
+    pending.sort(key=lambda pair: pair[0]["created_at"] if pair[0] else "")
+    deadline = time.monotonic() + RETRY_SECONDS
+    delivered = failed = 0
+    for item, message in pending:
+        handle = message["ReceiptHandle"]
+        if time.monotonic() > deadline:
+            sqs.change_message_visibility(QueueUrl=queue, ReceiptHandle=handle, VisibilityTimeout=0)
+        elif item is None:  # expired from the table, nothing left to deliver
+            sqs.delete_message(QueueUrl=queue, ReceiptHandle=handle)
+        elif item["status"] == "delivered" or delivery.deliver(
+            item, failed_status="dead", replay=True
+        ):
+            sqs.delete_message(QueueUrl=queue, ReceiptHandle=handle)
+            delivered += 1
+        else:
+            sqs.change_message_visibility(QueueUrl=queue, ReceiptHandle=handle, VisibilityTimeout=0)
+            failed += 1
+    return web.response(
+        200, {"delivered": delivered, "failed": failed, "left": _dead_letter_count()}
+    )
 
 
 def stats(event):
@@ -104,6 +157,8 @@ ROUTES = {
     "GET /api/events": list_events,
     "GET /api/events/{id}": show_event,
     "GET /api/payments/{id}": show_payment,
+    "POST /api/payments/{id}/replay": replay_payment,
+    "POST /api/dead-letters/retry": retry_dead_letters,
     "GET /api/stats": stats,
     "POST /api/simulate": simulate,
     "POST /api/merchant": set_merchant,
