@@ -119,6 +119,7 @@
 const $ = (selector) => document.querySelector(selector);
 let selected = null;
 let merchantFixed = false;
+let retried = { left: 0, at: -Infinity };
 
 // Builds DOM nodes. Strings always become text nodes, so event data is never parsed as HTML.
 function el(tag, props = {}, ...children) {
@@ -210,8 +211,11 @@ function renderSuggestions(rows) {
 
 function renderStats(stats) {
   merchantFixed = stats.merchant_fixed;
-  $("#dead").textContent = stats.dead_letters;
-  $("#dead").className = stats.dead_letters ? "count hot" : "count";
+  // SQS's message count can lag a retry's deletes by up to a minute; until then, trust the retry.
+  const lagging = Date.now() - retried.at < 60_000;
+  const dead = lagging ? Math.min(stats.dead_letters, retried.left) : stats.dead_letters;
+  $("#dead").textContent = dead;
+  $("#dead").className = dead ? "count hot" : "count";
   $("#fix").textContent = merchantFixed ? "Bring the bug back" : "Ship the fix";
   $("#budget").textContent = `${stats.questions_left} questions left today on the public demo.`;
 }
@@ -298,6 +302,7 @@ $("#fix").addEventListener("click", (e) => act(e.currentTarget, async () => {
 
 $("#retry").addEventListener("click", (e) => act(e.currentTarget, async () => {
   const result = await api("/api/dead-letters/retry", {});
+  retried = { left: result.left, at: Date.now() };
   return `${result.delivered} delivered, ${result.failed} still failing, ${result.left} left.`;
 }));
 
