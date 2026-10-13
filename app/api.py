@@ -5,9 +5,12 @@ import os
 import random
 import time
 
-from app import aws, delivery, signing, simulator, store, web
+import anthropic
+
+from app import agent, aws, delivery, signing, simulator, store, web
 
 DAILY_QUESTIONS = 100
+MAX_QUESTION = 500
 RETRY_BATCH = 25
 RETRY_SECONDS = 20  # stay well inside API Gateway's 30 second limit
 
@@ -117,6 +120,22 @@ def set_merchant(event):
     return web.response(200, {"fixed": body["fixed"]})
 
 
+def ask(event):
+    body = _json_body(event)
+    question = body.get("question") if isinstance(body, dict) else None
+    if not isinstance(question, str) or not question.strip():
+        return web.error(400, 'send {"question": "..."}')
+    if len(question) > MAX_QUESTION:
+        return web.error(400, f"keep questions under {MAX_QUESTION} characters")
+    if not store.take_question(_today(), DAILY_QUESTIONS):
+        return web.error(429, "the demo's daily question budget is used up, try again tomorrow")
+    try:
+        return web.response(200, agent.ask(question.strip()))
+    except anthropic.APIError as error:
+        print(f"agent call failed: {error!r}")
+        return web.error(502, "the model is unavailable right now")
+
+
 def demo_merchant(event):
     """Plays the merchant's app in the demo, checking signatures the way a real one should."""
     body = web.raw_body(event)
@@ -162,5 +181,6 @@ ROUTES = {
     "GET /api/stats": stats,
     "POST /api/simulate": simulate,
     "POST /api/merchant": set_merchant,
+    "POST /api/ask": ask,
     "POST /demo/merchant": demo_merchant,
 }

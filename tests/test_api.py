@@ -2,7 +2,10 @@ import json
 import os
 from datetime import UTC, datetime, timedelta
 
-from app import api, aws, signing, store, worker
+import anthropic
+import httpx2
+
+from app import agent, api, aws, signing, store, worker
 from app.simulator import event_body
 
 T0 = datetime(2026, 10, 12, 14, 0, tzinfo=UTC)
@@ -182,3 +185,36 @@ def test_retry_dead_letters_skips_events_already_replayed(destination):
 
     assert call("POST /api/dead-letters/retry")[1] == {"delivered": 1, "failed": 0, "left": 0}
     assert destination.received == []
+
+
+def test_ask_validates_the_question():
+    assert call("POST /api/ask", {"question": "  "})[0] == 400
+    assert call("POST /api/ask", {"question": "x" * 501})[0] == 400
+    assert call("POST /api/ask", {"nope": 1})[0] == 400
+
+
+def test_ask_answers_and_counts_against_the_budget(monkeypatch):
+    monkeypatch.setattr(agent, "ask", lambda question: {"answer": f"you asked {question}"})
+
+    assert call("POST /api/ask", {"question": " why? "}) == (200, {"answer": "you asked why?"})
+    assert call("GET /api/stats")[1]["questions_left"] == api.DAILY_QUESTIONS - 1
+
+
+def test_ask_stops_when_the_daily_budget_is_spent(monkeypatch):
+    monkeypatch.setattr(agent, "ask", lambda question: {"answer": "ok"})
+    monkeypatch.setattr(api, "DAILY_QUESTIONS", 1)
+
+    assert call("POST /api/ask", {"question": "one"})[0] == 200
+    assert call("POST /api/ask", {"question": "two"})[0] == 429
+
+
+def test_ask_reports_a_model_outage(monkeypatch):
+    def down(question):
+        raise anthropic.APIConnectionError(request=httpx2.Request("POST", "https://example.com"))
+
+    monkeypatch.setattr(agent, "ask", down)
+
+    assert call("POST /api/ask", {"question": "why?"}) == (
+        502,
+        {"error": "the model is unavailable right now"},
+    )
