@@ -1,0 +1,96 @@
+import base64
+import json
+import os
+from datetime import UTC, datetime
+
+from app import aws, ingest, signing
+from app.simulator import event_body
+
+BODY = event_body("payment.succeeded", "pay_1", datetime(2026, 10, 12, 14, 0, tzinfo=UTC))
+
+
+def request(body=BODY, headers=None, base64_encoded=False):
+    if headers is None:
+        headers = signing.signed_headers(os.environ["INBOUND_SECRET"], "msg_1", body)
+    raw = base64.b64encode(body.encode()).decode() if base64_encoded else body
+    return {
+        "body": raw,
+        "isBase64Encoded": base64_encoded,
+        "headers": headers,
+        "requestContext": {"requestId": "req-1"},
+    }
+
+
+def queued():
+    messages = aws.sqs().receive_message(QueueUrl=os.environ["QUEUE_URL"], MaxNumberOfMessages=10)
+    return [json.loads(m["Body"]) for m in messages.get("Messages", [])]
+
+
+def payload(payment_id):
+    return json.dumps(
+        {
+            "type": "payment.succeeded",
+            "timestamp": "2026-10-12T14:00:00.000Z",
+            "data": {"payment_id": payment_id},
+        }
+    )
+
+
+def test_a_signed_event_is_queued_with_its_receipt():
+    response = ingest.handler(request(), None)
+
+    assert response["statusCode"] == 202
+    assert json.loads(response["body"]) == {"receipt": "req-1"}
+    assert queued() == [{"id": "msg_1", "body": BODY, "receipt": "req-1"}]
+
+
+def test_a_bad_signature_is_rejected():
+    wrong = "whsec_" + base64.b64encode(b"wrong").decode()
+    headers = signing.signed_headers(wrong, "msg_1", BODY)
+
+    assert ingest.handler(request(headers=headers), None)["statusCode"] == 401
+    assert queued() == []
+
+
+def test_missing_headers_are_rejected():
+    assert ingest.handler(request(headers={"webhook-id": "msg_1"}), None)["statusCode"] == 400
+    assert queued() == []
+
+
+def test_a_body_without_a_payment_id_is_rejected():
+    body = json.dumps({"type": "payment.succeeded", "timestamp": "2026-10-12T14:00:00.000Z"})
+    assert ingest.handler(request(body), None)["statusCode"] == 400
+
+
+def test_a_payment_id_that_is_not_a_string_is_rejected():
+    for payment_id in (None, 42, ""):
+        assert ingest.handler(request(payload(payment_id)), None)["statusCode"] == 400
+    assert queued() == []
+
+
+def test_a_body_that_is_not_json_is_rejected():
+    assert ingest.handler(request("not json"), None)["statusCode"] == 400
+
+
+def test_an_oversized_body_is_rejected_before_anything_else():
+    huge = "x" * (200 * 1024 + 1)
+    assert ingest.handler(request(huge, headers={}), None)["statusCode"] == 413
+
+
+def test_non_ascii_text_is_verified_over_utf8_bytes():
+    body = json.dumps(
+        {
+            "type": "payment.succeeded",
+            "timestamp": "2026-10-12T14:00:00.000Z",
+            "data": {"payment_id": "pay_ü", "note": "café ☕"},
+        },
+        ensure_ascii=False,
+    )
+
+    assert ingest.handler(request(body), None)["statusCode"] == 202
+    assert queued()[0]["body"] == body
+
+
+def test_a_base64_encoded_body_is_decoded_before_verifying():
+    assert ingest.handler(request(base64_encoded=True), None)["statusCode"] == 202
+    assert queued()[0]["body"] == BODY
