@@ -42,6 +42,10 @@ locals {
   region  = data.aws_region.current.region
   models  = ["claude-haiku-5-5", "claude-opus-5-5"]
 
+  # The public demo gets a tight limit, which bounds what a flood of requests can cost. A load
+  # test copy needs room for 1,000 events a second plus their deliveries.
+  throttle = terraform.workspace == "default" ? { rate = 20, burst = 40 } : { rate = 2000, burst = 2000 }
+
   inbound_secret  = "whsec_${random_bytes.inbound_secret.base64}"
   outbound_secret = "whsec_${random_bytes.outbound_secret.base64}"
 
@@ -121,12 +125,14 @@ resource "aws_dynamodb_table" "events" {
 resource "aws_sqs_queue" "dead" {
   name                      = "${local.name}-dead"
   message_retention_seconds = 1209600
+  max_message_size          = 1048576 # a 200 KB body can reach 400 KB once escaped
 }
 
 resource "aws_sqs_queue" "events" {
   name                       = "${local.name}-events"
   visibility_timeout_seconds = 360
   message_retention_seconds  = 345600
+  max_message_size           = 1048576
 
   redrive_policy = jsonencode({
     deadLetterTargetArn = aws_sqs_queue.dead.arn
@@ -314,7 +320,7 @@ resource "aws_lambda_function" "api" {
 resource "aws_lambda_event_source_mapping" "worker" {
   event_source_arn        = aws_sqs_queue.events.arn
   function_name           = aws_lambda_function.worker.arn
-  batch_size              = 10
+  batch_size              = 5 # a delivery can take 10 s (connect, then read) and the worker has 60
   function_response_types = ["ReportBatchItemFailures"]
 
   scaling_config {
@@ -388,8 +394,8 @@ resource "aws_apigatewayv2_stage" "default" {
   auto_deploy = true
 
   default_route_settings {
-    throttling_burst_limit = 2000
-    throttling_rate_limit  = 2000
+    throttling_burst_limit = local.throttle.burst
+    throttling_rate_limit  = local.throttle.rate
   }
 
   dynamic "route_settings" {

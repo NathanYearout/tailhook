@@ -153,7 +153,7 @@ RETURN ALL_NEW
 
 **Retries:**
 
-- The worker processes a batch of up to 10 messages one at a time (boto3 resources
+- The worker processes a batch of up to 5 messages one at a time (boto3 resources
   aren't thread-safe, and the queue scales out across invocations instead), and reports
   per-message failures (`ReportBatchItemFailures`), so one bad event
   doesn't retry its neighbours.
@@ -353,7 +353,7 @@ from `AWS_PROFILE`.
   3.13 syntax. Timeouts: `ingest` 5 s, `worker` 60 s, `api` 29 s (just under API
   Gateway's limit). Each gets its own IAM role scoped to the exact table, queues,
   parameter and model ARNs it uses.
-- The worker's SQS event source mapping: batch size 10, partial batch responses,
+- The worker's SQS event source mapping: batch size 5, partial batch responses,
   maximum concurrency 100.
 - API Gateway HTTP API with the routes above and per-route throttling.
 - Log groups with 14-day retention.
