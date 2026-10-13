@@ -38,6 +38,6 @@ def _well_formed(body: str) -> bool:
     try:
         payload = json.loads(body)
         fields = (payload["type"], payload["timestamp"], payload["data"]["payment_id"])
-    except ValueError, KeyError, TypeError:
+    except (ValueError, KeyError, TypeError):
         return False
     return all(isinstance(field, str) and field for field in fields)
