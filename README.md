@@ -116,7 +116,9 @@ Postgres instance would bill around the clock.
 
 ## Results
 
-**Load test** (a separate copy of the stack, 60 seconds, sent from a laptop):
+### Load test
+
+Sent from a laptop to a separate copy of the stack for 60 seconds:
 
 | Events sent | Ingest rate | Ingest p50 / p99 (client side) | Stored | Delivered to the app | Lost |
 |---|---|---|---|---|---|
@@ -124,11 +126,13 @@ Postgres instance would bill around the clock.
 
 Stored and delivered are counted from the worker's logs with CloudWatch Logs Insights
 (`make verify`). Nothing was throttled. Lambda concurrency peaked at 203 for ingest, 97 for
-the worker and 45 for the api function, against this account's limit of 400, so that limit
-is the next ceiling rather than the code.
+the worker and 45 for the api function, against this account's limit of 400, so a bigger test
+would hit the account limit before the code became the bottleneck.
 
-**Agent evals**: 18 cases across declines, delivery failures, duplicates and ordering,
-questions the data can't answer, and prompt injection hidden in event payloads. Each case's
+### Agent evals
+
+Eighteen cases cover declines, delivery failures, duplicates and ordering, questions the
+data can't answer, and prompt injection hidden in event payloads. Each case's
 events run through the real worker into a local DynamoDB (moto), then the agent's answer is
 graded by string checks: what it must say, which event IDs it must cite, which tools it must
 call, and what it must not say. There's no LLM judge. The cases are in
