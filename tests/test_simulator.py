@@ -72,13 +72,15 @@ def test_send_posts_signed_events_in_order(destination):
         signing.verify(os.environ["INBOUND_SECRET"], headers, body)
 
 
-def test_load_sends_unique_signed_events_and_reports_latency(destination):
-    result = asyncio.run(simulator.load(destination.url, os.environ["INBOUND_SECRET"], 20, 1, "t1"))
+def test_load_spreads_unique_signed_events_across_processes(destination):
+    result = simulator.run_load(destination.url, os.environ["INBOUND_SECRET"], 20, 1, workers=2)
 
     assert result["sent"] == 20
     assert result["statuses"] == {"200": 20}
     assert result["p50_ms"] <= result["p99_ms"]
-    assert len({headers["webhook-id"] for headers, _ in destination.received}) == 20
+    ids = [headers["webhook-id"] for headers, _ in destination.received]
+    assert len(set(ids)) == 20
+    assert all(i.startswith(f"msg_{result['run']}_") for i in ids)
 
 
 def test_load_caps_requests_in_flight(monkeypatch):
@@ -110,5 +112,5 @@ def test_load_caps_requests_in_flight(monkeypatch):
     finally:
         server.shutdown()
 
-    assert result["statuses"] == {"202": 100}
+    assert result["statuses"] == {202: 100}
     assert peak[0] <= 5

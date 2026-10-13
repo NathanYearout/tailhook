@@ -17,6 +17,7 @@ import time
 import urllib.error
 import urllib.request
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -26,9 +27,9 @@ from app.store import iso, utcnow
 
 CARDS = [("visa", "4242"), ("mastercard", "4444"), ("amex", "0005"), ("discover", "1117")]
 ALPHABET = string.ascii_letters + string.digits
-# ponytail: tops out near MAX_IN_FLIGHT / latency (about 2,000/s at 100 ms); run more generators
-# to go higher.
-MAX_IN_FLIGHT = 200
+# Per process. httpx's pool does work in proportion to its size on every request, so a load
+# test adds processes rather than connections.
+MAX_IN_FLIGHT = 50
 
 
 @dataclass(frozen=True)
@@ -126,11 +127,36 @@ def send(url: str, secret: str, deliveries: list[Delivery]) -> Counter:
     return results
 
 
-async def load(url: str, secret: str, rate: int, duration: int, run: str) -> dict:
+def run_load(url: str, secret: str, rate: int, duration: int, workers: int = 8) -> dict:
+    """Split a load test across processes; one Python process tops out at a few hundred a second."""
+    run = os.urandom(4).hex()
+    jobs = [(url, secret, rate / workers, duration, run, part) for part in range(workers)]
+    with ProcessPoolExecutor(workers) as pool:
+        parts = list(pool.map(_load_part, jobs))
+
+    latencies = [latency for part in parts for latency in part["latencies"]]
+    seconds = max(part["ended"] for part in parts) - min(part["began"] for part in parts)
+    statuses = sum((part["statuses"] for part in parts), Counter())
+    return {
+        "run": run,
+        "sent": len(latencies),
+        "seconds": round(seconds, 1),
+        "rate_per_second": round(len(latencies) / seconds),
+        "statuses": {str(k): v for k, v in statuses.items()},
+        "p50_ms": round(statistics.median(latencies) * 1000),
+        "p99_ms": round(statistics.quantiles(latencies, n=100)[98] * 1000),
+    }
+
+
+def _load_part(job: tuple) -> dict:
+    return asyncio.run(load(*job))
+
+
+async def load(url: str, secret: str, rate: float, duration: int, run: str, part: int = 0) -> dict:
     """Send rate * duration unique events at a steady rate and time each response."""
     import httpx  # dev dependency, only needed here
 
-    total = rate * duration
+    total = round(rate * duration)
     latencies: list[float] = []
     statuses: Counter = Counter()
     limits = httpx.Limits(max_connections=MAX_IN_FLIGHT, max_keepalive_connections=MAX_IN_FLIGHT)
@@ -141,8 +167,8 @@ async def load(url: str, secret: str, rate: int, duration: int, run: str) -> dic
     async with httpx.AsyncClient(limits=limits, timeout=10) as client:
 
         async def one(n: int) -> None:
-            msg_id = f"msg_{run}_{n}"
-            body = event_body("payment.succeeded", f"pay_{run}_{n}", utcnow(), run=run)
+            msg_id = f"msg_{run}_{part}_{n}"
+            body = event_body("payment.succeeded", f"pay_{run}_{part}_{n}", utcnow(), run=run)
             async with gate:
                 started = time.perf_counter()
                 try:
@@ -154,7 +180,7 @@ async def load(url: str, secret: str, rate: int, duration: int, run: str) -> dic
                     statuses[type(error).__name__] += 1
                 latencies.append(time.perf_counter() - started)
 
-        began = time.perf_counter()
+        began, started_at = time.perf_counter(), time.time()
         tasks = []
         for n in range(total):
             delay = began + n / rate - time.perf_counter()
@@ -162,17 +188,8 @@ async def load(url: str, secret: str, rate: int, duration: int, run: str) -> dic
                 await asyncio.sleep(delay)
             tasks.append(asyncio.create_task(one(n)))
         await asyncio.gather(*tasks)
-        elapsed = time.perf_counter() - began
 
-    return {
-        "run": run,
-        "sent": total,
-        "seconds": round(elapsed, 1),
-        "rate_per_second": round(total / elapsed),
-        "statuses": {str(k): v for k, v in statuses.items()},
-        "p50_ms": round(statistics.median(latencies) * 1000),
-        "p99_ms": round(statistics.quantiles(latencies, n=100)[98] * 1000),
-    }
+    return {"began": started_at, "ended": time.time(), "statuses": statuses, "latencies": latencies}
 
 
 def verify(run: str, log_group: str) -> dict:
@@ -208,6 +225,7 @@ def main() -> int:
     many.add_argument("--url", required=True)
     many.add_argument("--rate", type=int, default=1000)
     many.add_argument("--duration", type=int, default=60)
+    many.add_argument("--workers", type=int, default=8, help="generator processes")
     check = commands.add_parser("verify", help="count what the worker did with a load run")
     check.add_argument("--run", required=True)
     check.add_argument("--log-group", default="/aws/lambda/tailhook-worker")
@@ -228,8 +246,7 @@ def main() -> int:
         seed = args.seed if args.seed is not None else random.randrange(1_000_000)
         print(json.dumps(dict(send(args.url, secret, mixed(seed, utcnow())))))
     else:
-        result = asyncio.run(load(args.url, secret, args.rate, args.duration, os.urandom(4).hex()))
-        print(json.dumps(result))
+        print(json.dumps(run_load(args.url, secret, args.rate, args.duration, args.workers)))
     return 0
 
 
