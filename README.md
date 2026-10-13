@@ -26,18 +26,17 @@ parks events that keep failing in a dead-letter queue.
 
 ## What you can do with it
 
-- **Watch events arrive** with their delivery status, decline codes, duplicate counts and
+- Watch events come in, with their delivery status, decline codes, duplicate counts and
   out-of-order flags.
-- **Open any event** to see its payload, every delivery attempt with your app's response, and
-  the payment's timeline in the order things actually happened.
-- **Break it, then fix it.** The demo's stand-in merchant app has a planted bug: refunds crash
-  it with `KeyError: 'original_amount'`. They're retried three times, land in the dead-letter
-  queue and trip a CloudWatch alarm. Ship the fix, press Retry dead letters, and they go
-  through.
-- **Replay a payment** in created order. Replay stops at the first failure, so a refund can't
-  overtake the payment it refunds.
-- **Ask the agent** things like "why didn't my app get the refund for pay_9Q?" Claude answers
-  with four read-only tools over what tailhook recorded, and cites the events it used.
+- Open an event to see its payload, every delivery attempt with your app's response, and the
+  payment's timeline in the order things actually happened.
+- Break it and fix it. The demo merchant app crashes on refunds with
+  `KeyError: 'original_amount'`, so they retry three times, land in the dead-letter queue and
+  set off a CloudWatch alarm. Ship the fix, hit Retry dead letters, and they go through.
+- Replay a payment in created order. Replay stops at the first failure, so a refund can't
+  overtake its payment.
+- Ask the agent things like "why didn't my app get the refund for pay_9Q?". Claude answers
+  with four read-only tools over what tailhook recorded and cites the events it used.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dead-letter-dark.png">
@@ -82,34 +81,38 @@ including on SQS retries; every other receipt is just counted. See
 
 ## Delivery guarantees
 
-- **At least once, not exactly once.** A worker can crash after your app answered but before
-  tailhook recorded it, and replays re-send on purpose. Every delivery keeps the sender's
-  `webhook-id` and is signed with tailhook's own secret, so verify the signature and dedupe on
-  that id.
-- **Duplicates are caught for 7 days.** Events leave the table after 7 days (DynamoDB TTL). A
-  sender retry inside that window is counted and dropped; one that arrives later is treated
-  as a new event.
-- **A dead-lettered event stays put.** Further copies from the sender are only counted, so
-  nothing reaches your app until someone presses Retry dead letters or replays the payment.
-  Dead letters wait 14 days, and a retry still delivers them after the event has left the
-  table.
-- **A delivery that landed stands.** If a replay and a worker retry race, a failed attempt
-  never sets a delivered event back to retrying.
-- **Order holds only on replay.** The queue and the workers run in parallel, so your app can
-  get a refund before its payment. Replaying a payment sends its events in created order and
-  stops at the first failure.
+Delivery is at least once. A worker can crash after your app answers but before tailhook
+writes that down, and replays re-send on purpose. Every delivery keeps the sender's
+`webhook-id` and is signed with tailhook's own secret, so verify the signature and dedupe on
+the id.
+
+Duplicates are caught for 7 days, which is how long events stay in the table (DynamoDB TTL).
+A sender retry inside that window is counted and dropped; one that shows up later looks like
+a new event.
+
+Once an event is dead-lettered, more copies from the sender are only counted, and nothing
+reaches your app until someone retries the dead letters or replays the payment. Dead letters
+are kept for 14 days, and a retry can still deliver one after its row has expired. If a
+replay and a worker retry race, a failed attempt never flips a delivered event back to
+retrying.
+
+Live deliveries aren't ordered: the queue and the workers run in parallel, so your app can
+get a refund before its payment. Replay is the ordered path. It sends a payment's events in
+created order and stops at the first failure.
 
 ## Why SQS and DynamoDB
 
-- **SQS between ingest and processing.** Ingest never waits on the database or your app, so a
-  slow or broken app can't make the sender time out. Retries and the dead-letter queue come
-  from the redrive policy; the worker only sets the backoff between tries.
-- **DynamoDB keyed on the idempotency key.** "Have I seen this, and who delivers it?" is one
-  conditional write, with no locks and no second round trip. Two indexes cover the reads:
-  a payment's events in created order, and the newest events. The newest-events index is
-  split across 8 shards because a single partition takes about 1,000 writes per second.
-- **Both cost nothing when idle.** A Postgres server would cost money around the clock for a
-  demo that's quiet most of the time.
+SQS sits between ingest and processing so ingest never waits on the database or on your app.
+A slow or broken app can't make the sender time out. Retries and the dead-letter queue come
+from the redrive policy; the worker only sets the backoff between tries.
+
+DynamoDB is keyed on the idempotency key, so "have I seen this, and who delivers it?" is one
+conditional write, with no locks and no second round trip. Two indexes cover the reads: a
+payment's events in created order, and the newest events overall. The newest-events index is
+spread over 8 shards because one partition tops out around 1,000 writes a second.
+
+Both cost nothing when idle, which matters for a demo that's quiet most of the time. A
+Postgres instance would bill around the clock.
 
 ## Results
 

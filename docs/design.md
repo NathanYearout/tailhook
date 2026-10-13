@@ -1,4 +1,4 @@
-# tailhook — design
+# tailhook design
 
 tailhook sits between a webhook sender and your app. It verifies and records every
 payment event, forwards it to your app with retries, lets you replay a payment's
@@ -10,8 +10,8 @@ agent. Everything is defined in Terraform and deploys with `make deploy`.
 
 ## Goals
 
-- Never lose an event, never deliver the same event to your app twice, and say
-  so when duplicates arrive instead of silently dropping them.
+- Never lose an event. Don't pass the sender's duplicates on to your app, but count
+  them instead of silently dropping them. Delivery itself is at least once.
 - Accept 1,000 events/sec at the ingest endpoint, with a load test that proves
   nothing was lost.
 - Make failures easy to see: every delivery attempt is recorded, failed
@@ -149,7 +149,8 @@ RETURN ALL_NEW
   the app's timestamp check; keeping the ID lets the app dedupe too.
 - 5 second timeout, standard library HTTP client.
 - Append `{at, status_code, ms, body_snippet (first 300 chars), replay}` to the
-  item's `attempts` list, and set `status`.
+  item's `attempts` list (keeping the newest 20) and set `status`. A failed attempt
+  never overwrites `delivered`, since a replay can race the worker.
 
 **Retries:**
 
@@ -179,7 +180,7 @@ One on-demand table, `tailhook-events`.
 | `owner` | Receipt ID that owns delivery |
 | `status` | `pending` / `retrying` / `delivered` / `dead` |
 | `attempts` | List of delivery attempts |
-| `shard` | `"feed#0"`–`"feed#7"`, from a hash of `id` |
+| `shard` | `"feed#0"` to `"feed#7"`, from a hash of `id` |
 | `expires_at` | TTL, `received_at` + 7 days, so the demo cleans itself up |
 
 Indexes (both project all attributes):
@@ -403,14 +404,8 @@ The README reports events sent, stored, lost, and ingest p50/p99.
 The load test runs against its own copy of the stack (Terraform workspace `load`), so
 its 60,000 events never show up in the demo.
 
-New accounts start with a low Lambda concurrency limit (often 10). We request an
-increase before the load test.
-
-## README
-
-GIF, live demo link, the architecture diagram above, *Why SQS and DynamoDB*, *How
-duplicates are handled*, load-test and eval numbers, how to deploy it yourself,
-and what I'd build next.
+This account's Lambda concurrency limit is 400. The load test peaked at 203 ingest,
+97 worker and 45 api executions, so it didn't need an increase.
 
 ## Repository layout
 
@@ -428,8 +423,8 @@ Makefile   pyproject.toml   README.md   .github/workflows/ci.yml
 - **Claude on Bedrock is gated for this account.** As of 2026-10-12, every
   availability check passes but calls return "not available for this account".
   Mitigation: the `LLM_PROVIDER=anthropic` path above. Revisit when AWS responds.
-- **Lambda concurrency quota** may cap the load test until the increase is
-  approved.
+- **Lambda concurrency** (400 on this account) is the next ceiling past about
+  1,000 events/sec.
 - **API Gateway's 30 s integration timeout** bounds the agent. Six Haiku rounds
   fit comfortably; Opus only runs in evals, outside API Gateway.
 
