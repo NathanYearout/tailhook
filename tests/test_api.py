@@ -255,3 +255,10 @@ def test_simulated_events_were_created_before_they_were_sent(destination, monkey
 
     created = [json.loads(body)["timestamp"] for _, body in destination.received]
     assert max(created) <= store.iso(store.utcnow())
+
+
+def test_retry_reports_what_it_put_back_not_sqs_lagging_count(destination, monkeypatch):
+    dead_letter("msg_a", event_type="refund.created")
+    monkeypatch.setattr(api, "_dead_letter_count", lambda: 2)  # SQS's count lags deletes
+
+    assert call("POST /api/dead-letters/retry")[1] == {"delivered": 1, "failed": 0, "left": 0}

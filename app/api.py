@@ -73,7 +73,7 @@ def replay_payment(event):
 
 def retry_dead_letters(event):
     sqs, queue = aws.sqs(), os.environ["DLQ_URL"]
-    messages = []
+    messages, drained = [], False
     while len(messages) < RETRY_BATCH:
         batch = sqs.receive_message(
             QueueUrl=queue,
@@ -82,6 +82,7 @@ def retry_dead_letters(event):
             WaitTimeSeconds=1,  # a short poll can come back empty while messages remain
         ).get("Messages", [])
         if not batch:
+            drained = True
             break
         messages += batch
 
@@ -96,11 +97,12 @@ def retry_dead_letters(event):
         pending.append((item, message))
     pending.sort(key=lambda pair: pair[0]["created_at"])
     deadline = time.monotonic() + RETRY_SECONDS
-    delivered = failed = 0
+    delivered = failed = skipped = 0
     for item, message in pending:
         handle = message["ReceiptHandle"]
         if time.monotonic() > deadline:
             sqs.change_message_visibility(QueueUrl=queue, ReceiptHandle=handle, VisibilityTimeout=0)
+            skipped += 1
         elif item["status"] == "delivered" or delivery.deliver(
             item, failed_status="dead", replay=True
         ):
@@ -109,9 +111,10 @@ def retry_dead_letters(event):
         else:
             sqs.change_message_visibility(QueueUrl=queue, ReceiptHandle=handle, VisibilityTimeout=0)
             failed += 1
-    return web.response(
-        200, {"delivered": delivered, "failed": failed, "left": _dead_letter_count()}
-    )
+    # SQS's count lags deletes by up to a minute. If the queue came back empty, what's left is
+    # exactly what this retry put back.
+    left = failed + skipped if drained else _dead_letter_count()
+    return web.response(200, {"delivered": delivered, "failed": failed, "left": left})
 
 
 def stats(event):
