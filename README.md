@@ -63,7 +63,8 @@ flowchart LR
     api -- "tool calls" --> model[gpt-oss-120b on Bedrock]
 ```
 
-Everything is in [`infra/main.tf`](infra/main.tf) and deploys with `make deploy`. The design
+Everything is in [`infra/main.tf`](infra/main.tf). Every push to `main` deploys it from
+GitHub Actions once the tests pass, and `make deploy` does the same from a laptop. The design
 doc is [`docs/design.md`](docs/design.md).
 
 ## How duplicates are handled
@@ -143,7 +144,9 @@ the run saved in [`evals/results/gpt-oss.json`](evals/results/gpt-oss.json), at 
 
 ## Run it yourself
 
-You need an AWS account, Terraform, and [uv](https://docs.astral.sh/uv/).
+You need an AWS account, Terraform, and [uv](https://docs.astral.sh/uv/). Terraform keeps its
+state in S3, so first point the `backend "s3"` block in [`infra/main.tf`](infra/main.tf) at a
+bucket you own.
 
 ```bash
 uv sync
@@ -173,4 +176,5 @@ $5 monthly budget alert, but the demo is public, so set a spend limit on the acc
 - Multiple destinations, each with its own URL and signing secret.
 - Adapters for real providers' webhook formats.
 - Streaming agent answers.
-- Deploys from CI with GitHub OIDC instead of from a laptop.
+- GitHub OIDC for deploys instead of an access key, once this AWS account's plan allows
+  identity providers.

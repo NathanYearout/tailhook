@@ -6,8 +6,8 @@ events in the order they actually happened, and has an agent you can ask things 
 "why did pay_7Hx fail?" or "why didn't my app get the refund for pay_9Q?".
 
 It runs on AWS: API Gateway, Lambda, SQS, DynamoDB, CloudWatch, and gpt-oss-120b on
-Bedrock for the agent. Everything is defined in Terraform and deploys with
-`make deploy`.
+Bedrock for the agent. Everything is defined in Terraform and deploys from GitHub
+Actions on every push to `main`.
 
 ## Goals
 
@@ -371,7 +371,8 @@ from `AWS_PROFILE`.
 - Outputs: API URL and the inbound secret (sensitive).
 
 `make deploy` builds the one zip all three functions share and runs
-`terraform apply`. `make destroy` tears it all
+`terraform apply`. State lives in a versioned S3 bucket with S3-native locking
+(`use_lockfile`), so CI and a laptop share it. `make destroy` tears it all
 down.
 
 ## Testing and CI
@@ -391,7 +392,12 @@ Unit tests use `pytest` and `moto` with no network access:
 - API: daily quota, question length.
 
 GitHub Actions on every push: `ruff check`, `pytest`, `terraform fmt -check`, and
-`terraform validate`.
+`terraform validate`. On `main`, a deploy job follows once both pass: it builds the
+zip, runs `terraform apply`, and checks that `/api/stats` answers. It runs in a
+`production` environment that only `main` can use, and signs in with a deploy IAM
+user's access key. That key can only touch the services Terraform manages, the
+`tailhook*` IAM roles and the state bucket. GitHub OIDC would avoid a long-lived
+key, but this account's plan doesn't allow creating identity providers.
 
 ## Load test
 
@@ -439,4 +445,4 @@ Makefile   pyproject.toml   README.md   .github/workflows/ci.yml
 - Multiple destinations, one per endpoint.
 - Adapters for real providers' webhook formats.
 - Streaming agent answers.
-- Deploy from CI with GitHub OIDC.
+- Swap the deploy key for GitHub OIDC once the account allows identity providers.

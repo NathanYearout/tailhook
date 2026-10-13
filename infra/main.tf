@@ -6,6 +6,13 @@ terraform {
     archive = { source = "hashicorp/archive", version = "~> 2.8" }
     random  = { source = "hashicorp/random", version = "~> 3.9" }
   }
+
+  backend "s3" {
+    bucket       = "tailhook-tfstate-d3790b93"
+    key          = "tailhook.tfstate"
+    region       = "us-east-2"
+    use_lockfile = true
+  }
 }
 
 provider "aws" {
