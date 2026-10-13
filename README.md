@@ -35,8 +35,9 @@ parks events that keep failing in a dead-letter queue.
   set off a CloudWatch alarm. Ship the fix, hit Retry dead letters, and they go through.
 - Replay a payment in created order. Replay stops at the first failure, so a refund can't
   overtake its payment.
-- Ask the agent things like "why didn't my app get the refund for pay_9Q?". Claude answers
-  with four read-only tools over what tailhook recorded and cites the events it used.
+- Ask the agent things like "why didn't my app get the refund for pay_9Q?". It answers with
+  four read-only tools over what tailhook recorded, cites the events it used, and turns down
+  anything that isn't about your webhooks.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dead-letter-dark.png">
@@ -59,7 +60,7 @@ flowchart LR
     dlq -- "retry" --> api
     api -- "replay, retry" --> app
     api --> table
-    api -- "tool calls" --> claude[Claude on Bedrock]
+    api -- "tool calls" --> model[gpt-oss-120b on Bedrock]
 ```
 
 Everything is in [`infra/main.tf`](infra/main.tf) and deploys with `make deploy`. The design
@@ -131,12 +132,14 @@ would hit the account limit before the code became the bottleneck.
 
 ### Agent evals
 
-Eighteen cases cover declines, delivery failures, duplicates and ordering, questions the
-data can't answer, and prompt injection hidden in event payloads. Each case's
+Twenty cases cover declines, delivery failures, duplicates and ordering, questions the
+data can't answer, prompt injection hidden in event payloads, and off-topic requests. Each case's
 events run through the real worker into a local DynamoDB (moto), then the agent's answer is
 graded by string checks: what it must say, which event IDs it must cite, which tools it must
 call, and what it must not say. There's no LLM judge. The cases are in
-[`evals/cases.json`](evals/cases.json); `make evals MODEL=haiku` runs them.
+[`evals/cases.json`](evals/cases.json); `make evals` runs them. gpt-oss-120b passed all 20 in
+the run saved in [`evals/results/gpt-oss.json`](evals/results/gpt-oss.json), at a median of
+1.4 s and $0.0004 a question.
 
 ## Run it yourself
 
@@ -147,7 +150,7 @@ uv sync
 make test                                  # unit tests, no AWS needed
 echo 'alert_email = "you@example.com"' > infra/terraform.tfvars
 make deploy                                # builds the Lambda packages and applies Terraform
-make evals MODEL=haiku                     # grades the agent (uses Bedrock, costs a few cents)
+make evals                                 # grades the agent (uses Bedrock, costs about a cent)
 ```
 
 To repeat the load test, deploy a throwaway copy in its own workspace, then destroy it:

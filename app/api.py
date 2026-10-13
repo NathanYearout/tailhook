@@ -8,8 +8,6 @@ from datetime import timedelta
 from functools import cache
 from pathlib import Path
 
-import anthropic
-
 from app import agent, aws, delivery, signing, simulator, store, web
 
 DAILY_QUESTIONS = 100
@@ -153,7 +151,7 @@ def ask(event):
         return web.error(429, "the demo's daily question budget is used up, try again tomorrow")
     try:
         return web.response(200, agent.ask(question.strip()))
-    except anthropic.APIError as error:
+    except agent.ModelUnavailable as error:
         print(f"agent call failed: {error!r}")
         return web.error(502, "the model is unavailable right now")
 

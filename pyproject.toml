@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "A webhook debugger for payment events, with an agent that explains what went wrong."
 requires-python = ">=3.14"
 dependencies = [
-    "anthropic[bedrock]>=1.13,<2",
     "boto3>=1.40",
 ]
 

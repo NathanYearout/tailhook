@@ -1,8 +1,8 @@
 import json
 from datetime import UTC, datetime
-from types import SimpleNamespace as Fake
 
 import pytest
+from botocore.exceptions import ClientError
 
 from app import agent, store
 from app.simulator import event_body
@@ -11,29 +11,34 @@ T0 = datetime(2026, 10, 12, 14, 0, tzinfo=UTC)
 
 
 def text(value):
-    return Fake(type="text", text=value)
+    return {"text": value}
 
 
-def tool_use(name, args, id="toolu_1"):
-    return Fake(type="tool_use", name=name, input=args, id=id)
+def tool_use(name, args, id="tooluse_1"):
+    return {"toolUse": {"toolUseId": id, "name": name, "input": args}}
 
 
 def reply(stop_reason, *content):
-    usage = Fake(input_tokens=1000, output_tokens=100)
-    return Fake(stop_reason=stop_reason, content=list(content), usage=usage)
+    return {
+        "stopReason": stop_reason,
+        "output": {"message": {"role": "assistant", "content": list(content)}},
+        "usage": {"inputTokens": 1000, "outputTokens": 100},
+    }
 
 
 class FakeClient:
-    """Stands in for the Anthropic client: hands back scripted replies, keeps the requests."""
+    """Stands in for the bedrock-runtime client: hands back scripted replies, keeps the requests."""
 
     def __init__(self, *replies):
         self.replies = list(replies)
         self.requests = []
-        self.messages = self  # so client.messages.create(...) lands on create() below
 
-    def create(self, **request):
+    def converse(self, **request):
         self.requests.append({**request, "messages": list(request["messages"])})
-        return self.replies.pop(0)
+        reply = self.replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
 
 
 @pytest.fixture(autouse=True)
@@ -52,10 +57,9 @@ def test_tool_call_then_answer():
 
     assert result["answer"] == "Declined with code 51 (msg_1)."
     assert [step["tool"] for step in result["steps"]] == ["payment_timeline"]
-    tool_result = client.requests[1]["messages"][-1]["content"][0]
-    assert tool_result["type"] == "tool_result"
-    assert tool_result["tool_use_id"] == "toolu_1"
-    assert json.loads(tool_result["content"])[0]["decline_code"] == "51"
+    tool_result = client.requests[1]["messages"][-1]["content"][0]["toolResult"]
+    assert tool_result["toolUseId"] == "tooluse_1"
+    assert json.loads(tool_result["content"][0]["text"])[0]["decline_code"] == "51"
 
 
 def test_requests_carry_system_and_tools():
@@ -64,9 +68,9 @@ def test_requests_carry_system_and_tools():
     agent.ask("hi", client=client)
 
     request = client.requests[0]
-    assert request["system"] == agent.SYSTEM
-    assert request["max_tokens"] == agent.MAX_TOKENS
-    assert {tool["name"] for tool in request["tools"]} == {
+    assert request["system"] == [{"text": agent.SYSTEM}]
+    assert request["inferenceConfig"] == {"maxTokens": agent.MAX_TOKENS}
+    assert {tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]} == {
         "payment_timeline",
         "get_event",
         "search_events",
@@ -84,8 +88,8 @@ def test_loop_stops_after_six_rounds():
     assert len(client.requests) == agent.MAX_ROUNDS
 
 
-def test_refusal_ends_loop():
-    client = FakeClient(reply("refusal", tool_use("get_event", {"event_id": "msg_1"})))
+def test_filtered_reply_ends_loop():
+    client = FakeClient(reply("content_filtered", tool_use("get_event", {"event_id": "msg_1"})))
 
     result = agent.ask("?", client=client)
 
@@ -102,7 +106,14 @@ def test_cost_adds_up_across_rounds():
     result = agent.ask("?", client=client)
 
     assert result["usage"] == {"input_tokens": 2000, "output_tokens": 200}
-    assert result["cost_usd"] == pytest.approx((2000 * 0.10 + 200 * 0.50) / 1_000_000)
+    assert result["cost_usd"] == pytest.approx((2000 * 0.15 + 200 * 0.60) / 1_000_000)
+
+
+def test_bedrock_errors_mean_model_unavailable():
+    denied = ClientError({"Error": {"Code": "AccessDeniedException"}}, "Converse")
+
+    with pytest.raises(agent.ModelUnavailable):
+        agent.ask("?", client=FakeClient(denied))
 
 
 def test_tools_return_errors():
@@ -130,21 +141,3 @@ def test_search_caps_its_limit(monkeypatch):
     )
 
     assert seen == {"limit": 50, "event_type": "payment.failed", "status": None, "since": None}
-
-
-def test_model_ids_follow_the_provider(monkeypatch):
-    monkeypatch.setenv("LLM_PROVIDER", "bedrock")
-    assert agent.model_id("haiku") == "us.anthropic.claude-haiku-5-5"
-    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
-    assert agent.model_id("opus") == "claude-opus-5-5"
-
-
-def test_api_key_from_ssm(monkeypatch):
-    # A key lying around in someone's shell must never be the one that gets billed.
-    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-from-the-shell")
-    monkeypatch.setattr(agent, "_api_key", lambda: "sk-from-ssm")
-    agent.make_client.cache_clear()
-
-    assert agent.make_client().api_key == "sk-from-ssm"
-    agent.make_client.cache_clear()

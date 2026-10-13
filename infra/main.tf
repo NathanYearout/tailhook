@@ -21,17 +21,6 @@ variable "alert_email" {
   description = "Where alarms and budget warnings are sent."
 }
 
-variable "llm_provider" {
-  type        = string
-  default     = "bedrock"
-  description = "bedrock, or anthropic to call the Claude API with the key stored in SSM."
-
-  validation {
-    condition     = contains(["bedrock", "anthropic"], var.llm_provider)
-    error_message = "llm_provider must be bedrock or anthropic."
-  }
-}
-
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
@@ -147,11 +136,6 @@ data "archive_file" "core" {
   output_path = "${path.module}/../build/core.zip"
 }
 
-data "archive_file" "api" {
-  type        = "zip"
-  source_dir  = "${path.module}/../build/api"
-  output_path = "${path.module}/../build/api.zip"
-}
 
 data "aws_iam_policy_document" "lambda_assume" {
   statement {
@@ -204,13 +188,10 @@ data "aws_iam_policy_document" "api" {
   statement {
     actions = ["bedrock:InvokeModel"]
     resources = concat(
+      ["arn:aws:bedrock:${local.region}::foundation-model/openai.gpt-oss-120b-1:0"],
       [for m in local.models : "arn:aws:bedrock:${local.region}:${local.account}:inference-profile/us.anthropic.${m}"],
       [for m in local.models : "arn:aws:bedrock:*::foundation-model/anthropic.${m}"],
     )
-  }
-  statement {
-    actions   = ["ssm:GetParameter"]
-    resources = ["arn:aws:ssm:${local.region}:${local.account}:parameter/tailhook/anthropic-api-key"]
   }
 }
 
@@ -296,8 +277,8 @@ resource "aws_lambda_function" "api" {
   runtime          = "python3.14"
   architectures    = ["arm64"]
   handler          = "app.api.handler"
-  filename         = data.archive_file.api.output_path
-  source_code_hash = data.archive_file.api.output_base64sha256
+  filename         = data.archive_file.core.output_path
+  source_code_hash = data.archive_file.core.output_base64sha256
   timeout          = 29
   memory_size      = 512
 
@@ -309,7 +290,6 @@ resource "aws_lambda_function" "api" {
       DESTINATION_URL = "${local.base_url}/demo/merchant"
       INBOUND_SECRET  = local.inbound_secret
       OUTBOUND_SECRET = local.outbound_secret
-      LLM_PROVIDER    = var.llm_provider
     }
   }
 

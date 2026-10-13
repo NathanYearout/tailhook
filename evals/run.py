@@ -1,7 +1,7 @@
 """Grade the agent against evals/cases.json.
 
-    uv run python -m evals.run --model haiku
-    uv run python -m evals.run --model opus --only refund-not-received
+    uv run python -m evals.run --model gpt-oss
+    uv run python -m evals.run --model haiku --only refund-not-received
 
 Each case's events go into a local moto server (DynamoDB only) through the real worker code,
 with a stand-in merchant app that fails refunds. Only the model calls leave the machine.
@@ -95,7 +95,7 @@ def load(events: list[dict], merchant_fixed: bool) -> None:
 
 
 def grade(case: dict, outcome: dict) -> list[str]:
-    answer = outcome["answer"].lower()
+    answer = outcome["answer"].lower().replace("\u2019", "'")
     called = {step["tool"] for step in outcome["steps"]}
     failures = []
     for wanted in case.get("must_include", []):
@@ -112,7 +112,7 @@ def grade(case: dict, outcome: dict) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Grade the agent against evals/cases.json.")
-    parser.add_argument("--model", choices=["haiku", "opus"], default="haiku")
+    parser.add_argument("--model", choices=["gpt-oss", "haiku", "opus"], default="gpt-oss")
     parser.add_argument("--only", help="run one case by name")
     args = parser.parse_args()
 

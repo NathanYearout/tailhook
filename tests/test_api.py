@@ -3,9 +3,6 @@ import os
 import time
 from datetime import UTC, datetime, timedelta
 
-import anthropic
-import httpx2
-
 from app import agent, api, aws, signing, store, worker
 from app.simulator import event_body
 
@@ -215,7 +212,7 @@ def test_ask_budget_spent(monkeypatch):
 
 def test_ask_model_outage(monkeypatch):
     def down(question):
-        raise anthropic.APIConnectionError(request=httpx2.Request("POST", "https://example.com"))
+        raise agent.ModelUnavailable("connection reset")
 
     monkeypatch.setattr(agent, "ask", down)
 

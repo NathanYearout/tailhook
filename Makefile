@@ -13,15 +13,11 @@ lint:
 	uv run ruff format --check .
 	$(TF) fmt -check
 
-# Two packages: ingest and worker need only the standard library and the boto3 in the Lambda
-# runtime; the api function also bundles anthropic, built for arm64.
+# One package for every function: the standard library and the boto3 in the Lambda runtime.
 build:
 	rm -rf build
-	mkdir -p build/core build/api
+	mkdir -p build/core
 	cp -r app build/core/
-	cp -r app build/api/
-	uv pip install --quiet --target build/api --python-platform aarch64-manylinux_2_28 \
-		--python-version 3.14 --only-binary :all: "anthropic>=1.13,<2"
 	find build -name __pycache__ -prune -exec rm -rf {} +
 
 deploy: build
@@ -32,7 +28,7 @@ destroy:
 	$(TF) destroy
 
 evals:
-	uv run python -m evals.run --model $(or $(MODEL),haiku)
+	uv run python -m evals.run --model $(or $(MODEL),gpt-oss)
 
 load:
 	TAILHOOK_SECRET=$$($(TF) output -raw inbound_secret) uv run python -m app.simulator load \

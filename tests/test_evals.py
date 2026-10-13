@@ -38,6 +38,11 @@ def test_grade_reports_each_failure():
     ]
 
 
+def test_grade_accepts_curly_apostrophes():
+    case = {"must_include": [["can't find"]]}
+    assert grade(case, outcome("I can\u2019t find pay_zz404.")) == []
+
+
 # For each case: a right answer, then the opposite in words the string checks used to accept.
 FLIPS = {
     "worth-retrying": (
