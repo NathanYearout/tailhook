@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from datetime import UTC, datetime, timedelta
 
 import anthropic
@@ -35,7 +36,10 @@ def receive(msg_id, event_type="payment.succeeded", payment_id="pay_1", at=0, **
             "messageId": msg_id,
             "receiptHandle": "-",
             "body": json.dumps(message),
-            "attributes": {"ApproximateReceiveCount": "1"},
+            "attributes": {
+                "ApproximateReceiveCount": "1",
+                "SentTimestamp": str(time.time_ns() // 1_000_000),
+            },
         }
     )
     return body
@@ -230,3 +234,24 @@ def test_the_dashboard_never_renders_event_text_as_html():
     _, page = call("GET /")
     for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"):
         assert sink not in page
+
+
+def test_retry_dead_letters_delivers_events_that_outlived_their_row(destination):
+    # The table forgets events after 7 days and the DLQ keeps them for 14, but the message
+    # still carries the whole event.
+    body = event_body("refund.created", "pay_1", T0)
+    message = {"id": "msg_old", "body": body, "receipt": "r-old"}
+    aws.sqs().send_message(QueueUrl=os.environ["DLQ_URL"], MessageBody=json.dumps(message))
+
+    assert call("POST /api/dead-letters/retry")[1] == {"delivered": 1, "failed": 0, "left": 0}
+    assert [sent for _, sent in destination.received] == [body]
+    assert store.get_event("msg_old")["status"] == "delivered"
+
+
+def test_simulated_events_were_created_before_they_were_sent(destination, monkeypatch):
+    monkeypatch.setenv("WEBHOOK_URL", destination.url)
+
+    call("POST /api/simulate")
+
+    created = [json.loads(body)["timestamp"] for _, body in destination.received]
+    assert max(created) <= store.iso(store.utcnow())

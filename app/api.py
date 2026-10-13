@@ -4,6 +4,7 @@ import json
 import os
 import random
 import time
+from datetime import timedelta
 from functools import cache
 from pathlib import Path
 
@@ -84,16 +85,22 @@ def retry_dead_letters(event):
             break
         messages += batch
 
-    pending = [(store.get_event(json.loads(m["Body"])["id"]), m) for m in messages]
-    pending.sort(key=lambda pair: pair[0]["created_at"] if pair[0] else "")
+    pending = []
+    for message in messages:
+        queued = json.loads(message["Body"])
+        # The DLQ keeps messages for 14 days and the table keeps events for 7, but the message
+        # carries everything needed to store the event again.
+        item = store.get_event(queued["id"])
+        if item is None:
+            item, _ = store.record_receipt(queued["id"], queued["body"], queued["receipt"])
+        pending.append((item, message))
+    pending.sort(key=lambda pair: pair[0]["created_at"])
     deadline = time.monotonic() + RETRY_SECONDS
     delivered = failed = 0
     for item, message in pending:
         handle = message["ReceiptHandle"]
         if time.monotonic() > deadline:
             sqs.change_message_visibility(QueueUrl=queue, ReceiptHandle=handle, VisibilityTimeout=0)
-        elif item is None:  # expired from the table, nothing left to deliver
-            sqs.delete_message(QueueUrl=queue, ReceiptHandle=handle)
         elif item["status"] == "delivered" or delivery.deliver(
             item, failed_status="dead", replay=True
         ):
@@ -119,7 +126,9 @@ def stats(event):
 
 
 def simulate(event):
-    deliveries = simulator.mixed(random.randrange(1_000_000), store.utcnow())
+    # mixed() spreads events over the 10 minutes after its start; keep them all in the past.
+    start = store.utcnow() - timedelta(minutes=10)
+    deliveries = simulator.mixed(random.randrange(1_000_000), start)
     responses = simulator.send(os.environ["WEBHOOK_URL"], os.environ["INBOUND_SECRET"], deliveries)
     return web.response(200, {"sent": len(deliveries), "responses": dict(responses)})
 
