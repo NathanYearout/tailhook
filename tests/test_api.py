@@ -153,9 +153,10 @@ def test_replaying_an_unknown_payment_is_404():
     assert call("POST /api/payments/{id}/replay", path={"id": "pay_none"})[0] == 404
 
 
-def dead_letter(msg_id, **event):
+def dead_letter(msg_id, event_type="payment.succeeded", payment_id="pay_1", at=0):
     """An event whose delivery gave up: marked dead, with its message in the DLQ."""
-    body = receive(msg_id, **event)
+    body = event_body(event_type, payment_id, T0 + timedelta(seconds=at))
+    store.record_receipt(msg_id, body, f"r-{msg_id}")
     failed = {"at": "-", "status_code": 500, "ms": 1, "body": "boom", "replay": False}
     store.add_attempt(msg_id, failed, "dead")
     message = {"id": msg_id, "body": body, "receipt": f"r-{msg_id}"}

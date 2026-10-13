@@ -132,3 +132,22 @@ def test_the_question_budget_stops_at_the_cap():
     assert [store.take_question("2026-10-12", cap=2) for _ in range(3)] == [True, True, False]
     assert store.questions_asked("2026-10-12") == 2
     assert store.questions_asked("2026-10-13") == 0
+
+
+def test_a_failed_attempt_never_overwrites_a_delivery():
+    # A replay that started before the worker's delivery landed finishes after it.
+    store.record_receipt("msg_1", body(), "r1")
+    store.add_attempt("msg_1", attempt(200), "delivered")
+    store.add_attempt("msg_1", attempt(500), "retrying")
+
+    saved = store.get_event("msg_1")
+    assert saved["status"] == "delivered"
+    assert [a["status_code"] for a in saved["attempts"]] == [200, 500]
+
+
+def test_only_the_newest_twenty_attempts_are_kept():
+    store.record_receipt("msg_1", body(), "r1")
+    for n in range(25):
+        store.add_attempt("msg_1", {**attempt(500), "ms": n}, "retrying")
+
+    assert [a["ms"] for a in store.get_event("msg_1")["attempts"]] == list(range(5, 25))

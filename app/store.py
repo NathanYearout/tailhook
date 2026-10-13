@@ -13,6 +13,7 @@ from app import aws
 
 SHARDS = 8
 KEEP_FOR = timedelta(days=7)
+KEEP_ATTEMPTS = 20
 MERCHANT = {"id": "config#merchant"}
 
 
@@ -83,12 +84,34 @@ def record_receipt(
 
 
 def add_attempt(event_id: str, attempt: dict, status: str) -> None:
-    aws.table().update_item(
-        Key={"id": event_id},
-        UpdateExpression="SET attempts = list_append(attempts, :attempt), #status = :status",
-        ExpressionAttributeNames={"#status": "status"},
-        ExpressionAttributeValues={":attempt": [attempt], ":status": status},
-    )
+    """Record a delivery attempt and set the event's status.
+
+    A failure never overwrites "delivered": a replay can race the worker, and a delivery that
+    landed first stands. Only the newest attempts are kept, since repeated replays could
+    otherwise grow the item past DynamoDB's 400 KB limit.
+    """
+    table = aws.table()
+    update = {
+        "Key": {"id": event_id},
+        "UpdateExpression": "SET attempts = list_append(attempts, :attempt), #status = :status",
+        "ExpressionAttributeNames": {"#status": "status"},
+        "ExpressionAttributeValues": {":attempt": [attempt], ":status": status},
+        "ReturnValues": "UPDATED_NEW",
+    }
+    if status != "delivered":
+        update["ConditionExpression"] = "#status <> :delivered"
+        update["ExpressionAttributeValues"][":delivered"] = "delivered"
+    try:
+        attempts = table.update_item(**update)["Attributes"]["attempts"]
+    except table.meta.client.exceptions.ConditionalCheckFailedException:
+        attempts = table.update_item(
+            Key={"id": event_id},
+            UpdateExpression="SET attempts = list_append(attempts, :attempt)",
+            ExpressionAttributeValues={":attempt": [attempt]},
+            ReturnValues="UPDATED_NEW",
+        )["Attributes"]["attempts"]
+    if len(attempts) > KEEP_ATTEMPTS:
+        table.update_item(Key={"id": event_id}, UpdateExpression="REMOVE attempts[0]")
 
 
 def get_event(event_id: str) -> dict | None:
@@ -138,8 +161,8 @@ def recent(
             query["FilterExpression"] = functools.reduce(operator.and_, filters)
         else:
             query["Limit"] = limit
-        # ponytail: one 1 MB page per shard; paginate if filtered searches ever need to look
-        # past a few thousand recent events
+        # One page (up to 1 MB) per shard. A filtered search only looks through the few thousand
+        # most recent events; paginate if it ever needs to go further back.
         found += aws.table().query(**query)["Items"]
     found.sort(key=_received, reverse=True)
     return found[:limit]
